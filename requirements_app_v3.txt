@@ -8,3 +8,4 @@ pandas
 plotly
 sqlite3-binary
 st-aggrid
+# rebuild trigger
