@@ -3,3 +3,8 @@ pandas
 plotly
 openpyxl
 streamlit-aggrid
+streamlit
+pandas
+plotly
+sqlite3-binary
+st-aggrid
