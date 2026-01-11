@@ -4,7 +4,19 @@ from pathlib import Path
 import os
 import streamlit as st
 import locale
-locale.setlocale(locale.LC_TIME, "en_GB.UTF-8")
+import locale
+
+def set_time_locale():
+    # Try common GB locales across platforms/containers
+    for loc in ("en_GB.UTF-8", "en_GB.utf8", "en_GB", "C.UTF-8", "C"):
+        try:
+            locale.setlocale(locale.LC_TIME, loc)
+            return loc
+        except locale.Error:
+            continue
+    return None
+
+_active_locale = set_time_locale()
 from utils.branding import APP_NAME, APP_TAGLINE, APP_ICON
 
 
