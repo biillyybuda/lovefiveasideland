@@ -5,7 +5,6 @@ import pandas as pd
 import psycopg2
 import streamlit as st
 
-
 # -----------------------------
 # Config (keep exactly like before)
 # -----------------------------
@@ -22,7 +21,11 @@ DRAW_VALUE = cfg.get("draw_value", 0.5)
 STARTING_MMR = cfg.get("starting_mmr", 1000)
 
 # League scoping (your current league)
-LEAGUE_ID = int(os.getenv("LEAGUE_ID", "1"))
+def get_current_league_id() -> int:
+    league_id = st.session_state.get("league_id")
+    if not league_id:
+        raise RuntimeError("No league selected in session_state")
+    return int(league_id)
 
 # -----------------------------
 # Postgres / Supabase connection
@@ -65,22 +68,24 @@ def get_conn():
 # -----------------------------
 @st.cache_data(ttl=300)
 def load_players_df():
+    league_id = get_current_league_id()
     conn = get_conn()
     df = pd.read_sql(
         'SELECT * FROM public.players WHERE league_id = %s ORDER BY name',
         conn,
-        params=(LEAGUE_ID,),
+        params=(league_id,),
     )
     conn.close()
     return df
 
 @st.cache_data(ttl=300)
 def load_matches_df():
+    league_id = get_current_league_id()
     conn = get_conn()
     df = pd.read_sql(
         'SELECT * FROM public.matches WHERE league_id = %s ORDER BY date',
         conn,
-        params=(LEAGUE_ID,),
+        params=(league_id,),
     )
     conn.close()
     return df
