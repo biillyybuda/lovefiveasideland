@@ -23,6 +23,19 @@ def compute_result_from_score(score: str):
     if b > a: return "B"
     return "DRAW"
 
+@st.cache_data(ttl=300)
+def _season_mmr_map(player_ids: tuple[int, ...], season_start: str):
+    conn = get_conn()
+    try:
+        out = {}
+        for pid in player_ids:
+            # "current_mmr" isn't important for season reset display; pass 1000 safely
+            out[int(pid)] = float(get_season_mmr(conn, int(pid), season_start, float(STARTING_MMR)))
+        return out
+    finally:
+        conn.close()
+
+
 def render_dashboard_page():
     st.set_page_config(page_title="Dashboard | Love Five-A-Side", layout="wide")
     page_header(
@@ -82,7 +95,7 @@ def render_dashboard_page():
 
 
     # Total players = unique players who actually played (in processed matches, for the selected period)
-    def _parse_team(s):
+    def _parse_team(s): # type: ignore
         return [p.strip() for p in str(s or "").split(",") if p.strip()]
 
     players_played = set()
@@ -132,19 +145,12 @@ def render_dashboard_page():
 
 
 
-    conn = get_conn()
-
-    try:
-        if season_mode == "Single Year (season reset)" and season_start:
-            dfp["_display_mmr"] = dfp.apply(
-                lambda r: get_season_mmr(conn, int(r["id"]), season_start, float(r["mmr"])),
-                axis=1
-            )
-        else:
-            # Combined (rolling): show true rolling MMR
-            dfp["_display_mmr"] = dfp["mmr"].astype(float)
-    finally:
-        conn.close()
+    if season_mode == "Single Year (season reset)" and season_start:
+        ids = tuple(int(x) for x in dfp["id"].tolist())
+        mmr_map = _season_mmr_map(ids, season_start)
+        dfp["_display_mmr"] = dfp["id"].map(mmr_map).astype(float)
+    else:
+        dfp["_display_mmr"] = dfp["mmr"].astype(float)
 
     top_player = dfp.loc[dfp["_display_mmr"].idxmax(), "name"] if not dfp.empty else "N/A"
 
@@ -290,7 +296,7 @@ def render_dashboard_page():
         mp = matches_ct.get(name, 0)
         return round((mp / total_processed_matches * 100), 1) if total_processed_matches > 0 else 0.0
 
-    players_df = load_players_df()
+    players_df = dfp
     if players_df.empty:
         st.info("No players found yet. Add players in Player Management to get started.")
         return
@@ -325,18 +331,13 @@ def render_dashboard_page():
     df_view = df_view[df_view["Matches"] >= min_games]
 
     # 🔹 Add MMR column from players table
-    df_mmr = load_players_df()[["id", "name", "display_name", "mmr"]].copy()
-    conn = get_conn()
-    try:
-        if season_mode == "Single Year (season reset)" and season_start:
-            df_mmr["MMR"] = df_mmr.apply(
-                lambda r: round(get_season_mmr(conn, int(r["id"]), season_start, float(r["mmr"])), 1),
-                axis=1
-            )
-        else:
-            df_mmr["MMR"] = df_mmr["mmr"].astype(float).round(1)
-    finally:
-        conn.close()
+    df_mmr = dfp[["id", "name", "display_name", "mmr"]].copy()
+    if season_mode == "Single Year (season reset)" and season_start:
+        ids = tuple(int(x) for x in df_mmr["id"].tolist())
+        mmr_map = _season_mmr_map(ids, season_start)
+        df_mmr["MMR"] = df_mmr["id"].map(mmr_map).astype(float).round(1)
+    else:
+        df_mmr["MMR"] = df_mmr["mmr"].astype(float).round(1)
 
     df_mmr["Name"] = df_mmr["display_name"].fillna(df_mmr["name"])
     df_mmr = df_mmr[["Name", "MMR"]]

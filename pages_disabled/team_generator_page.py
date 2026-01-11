@@ -14,6 +14,15 @@ from utils.calc_utils import calibrate_winprob_scale, expected_score_calibrated
 from utils.preview_insights import generate_preview_insights
 from utils.ui_components import page_header
 
+@st.cache_data(ttl=300)
+def _players_table_cached():
+    conn = open_db()
+    try:
+        return pd.read_sql("SELECT * FROM players", conn)
+    finally:
+        conn.close()
+
+
 def _round_numeric(df: pd.DataFrame, dp: int = 1) -> pd.DataFrame:
     out = df.copy()
     for c in out.columns:
@@ -420,7 +429,7 @@ def _style_team_columns(df: pd.DataFrame, team_a: list[str], team_b: list[str], 
     for col in df.columns:
         c = str(col).strip().lower()
         if c in ("player a", "player b", "player_a", "player_b", "player", "name", "a", "b"):
-            styled = styled.applymap(_color, subset=[col])
+            styled = styled.applymap(_color, subset=[col]) # type: ignore
     return styled
 
 
@@ -440,7 +449,7 @@ def _recent_form_boxes_html(player_name: str, matches_eng: pd.DataFrame) -> str:
     key = clean_name(player_name)
 
     df = matches_eng.copy()
-    df["date"] = pd.to_datetime(df.get("date"), errors="coerce")
+    df["date"] = pd.to_datetime(df.get("date"), errors="coerce") # type: ignore
     df = df.sort_values("date")
 
     results = []
@@ -599,10 +608,7 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
         unsafe_allow_html=True,
     )
 
-    # Load DB
-    conn = open_db()
-    players_df = pd.read_sql("SELECT * FROM players", conn)
-    conn.close()
+    players_df = _players_table_cached()
 
     # Engine state (results-only friendly)
     eng = get_engine_state()
@@ -640,7 +646,7 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
 
     # expected_score_calibrated -> P(A win) + 0.5*P(draw)
     pE = _expected_score_league_calibrated(a_mmr, b_mmr)
-    pA_win, pDraw, pB_win = _compute_1x2(pE, matches_eng)
+    pA_win, pDraw, pB_win = _compute_1x2(pE, matches_eng) # type: ignore
 
     oddA, oddX, oddB = _book_odds(pA_win, pDraw, pB_win, overround=1.06)
 
@@ -746,7 +752,7 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
         km = insights.get("key_matchups")
         if km is not None:
             km_d = _df_with_display_names(km)
-            km_s = _style_team_columns(km_d, team_a, team_b, teamA_fg, teamB_fg)
+            km_s = _style_team_columns(km_d, team_a, team_b, teamA_fg, teamB_fg) # type: ignore
             km_s = _format_1dp(km_s, km_d)
             st.dataframe(km_s, use_container_width=True)
         else:
@@ -757,12 +763,12 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
         if isinstance(bt, (list, tuple)) and len(bt) == 2:
             st.markdown(f"**Team A:** {', '.join([_display_name(p) for p in team_a])}")
             btA_d = _df_with_display_names(bt[0])
-            btA_s = _style_team_columns(btA_d, team_a, [], teamA_fg, teamA_fg)
+            btA_s = _style_team_columns(btA_d, team_a, [], teamA_fg, teamA_fg) # type: ignore
             btA_s = _format_1dp(btA_s, btA_d)
             st.dataframe(btA_s, use_container_width=True)
             st.markdown(f"**Team B:** {', '.join([_display_name(p) for p in team_b])}")
             btB_d = _df_with_display_names(bt[1])
-            btB_s = _style_team_columns(btB_d, team_b, [], teamB_fg, teamB_fg)
+            btB_s = _style_team_columns(btB_d, team_b, [], teamB_fg, teamB_fg) # type: ignore
             btB_s = _format_1dp(btB_s, btB_d)
             st.dataframe(btB_s, use_container_width=True)
         else:
@@ -774,7 +780,7 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
         if fs is not None:
             fs_d = _round_numeric(_df_with_display_names(fs), 1)
             st.dataframe(
-                _style_team_columns(fs_d, team_a, team_b, teamA_fg, teamB_fg),
+                _style_team_columns(fs_d, team_a, team_b, teamA_fg, teamB_fg), # type: ignore
                 use_container_width=True
             )
         else:
@@ -827,10 +833,10 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
         cA, cB = st.columns(2)
         with cA:
             for p in team_a:
-                st.html(card(p, own_team=team_a, opp_team=team_b, fg=teamA_fg, bg=teamA_bg))
+                st.html(card(p, own_team=team_a, opp_team=team_b, fg=teamA_fg, bg=teamA_bg)) # type: ignore
         with cB:
             for p in team_b:
-                st.html(card(p, own_team=team_b, opp_team=team_a, fg=teamB_fg, bg=teamB_bg))
+                st.html(card(p, own_team=team_b, opp_team=team_a, fg=teamB_fg, bg=teamB_bg)) # type: ignore
 def render_team_generator_page(show_header: bool = True):
     _ensure_session_defaults()
     _ensure_color_settings()

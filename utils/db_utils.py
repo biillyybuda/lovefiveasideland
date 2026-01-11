@@ -3,6 +3,8 @@ from pathlib import Path
 from datetime import datetime
 import pandas as pd
 import psycopg2
+import streamlit as st
+
 
 # -----------------------------
 # Config (keep exactly like before)
@@ -61,6 +63,7 @@ def get_conn():
 # -----------------------------
 # Data loaders (used widely)
 # -----------------------------
+@st.cache_data(ttl=300)
 def load_players_df():
     conn = get_conn()
     df = pd.read_sql(
@@ -71,6 +74,7 @@ def load_players_df():
     conn.close()
     return df
 
+@st.cache_data(ttl=300)
 def load_matches_df():
     conn = get_conn()
     df = pd.read_sql(

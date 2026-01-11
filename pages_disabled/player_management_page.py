@@ -170,7 +170,7 @@ def render_player_management_page():
 
     # Nice label: "Billy (active)" / "Kelso (archived)"
     all_players["status"] = all_players["is_active"].fillna(1).astype(int).map({1: "active", 0: "archived"})
-    all_players["label"] = all_players["display_name"].astype(str) + " (" + all_players["status"] + ")"
+    all_players["label"] = all_players["display_name"].astype(str) + " (" + all_players["status"] + ")" # type: ignore
 
     label_to_id = dict(zip(all_players["label"], all_players["id"]))
 
@@ -228,7 +228,7 @@ def render_player_management_page():
                     ui_name = str(row.get("display_name", "")).strip()
                     if ui_name == "":
                         ui_name = display_name(name_key)
-                    mmr = float(row.get('mmr') if row.get('mmr') not in (None, "") else STARTING_MMR)
+                    mmr = float(row.get('mmr') if row.get('mmr') not in (None, "") else STARTING_MMR) # type: ignore
                     strengths_str = str(row.get("strengths", "")).strip()
                     fitness = str(row.get("fitness", "")).strip()
 
