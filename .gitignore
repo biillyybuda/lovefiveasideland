@@ -1,0 +1,20 @@
+# Virtual environments
+venv/
+venv312/
+
+# Secrets
+.env
+.env.*
+.streamlit/secrets.toml
+
+# Databases
+*.db
+
+# Python junk
+__pycache__/
+*.pyc
+
+# Logs / backups
+logs/
+backups/
+Archive/

@@ -1,0 +1,8 @@
+streamlit
+pandas
+plotly
+openpyxl
+streamlit-aggrid
+matplotlib
+numpy
+Pillow
