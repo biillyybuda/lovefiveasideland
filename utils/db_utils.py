@@ -34,12 +34,19 @@ LEAGUE_ID = int(os.getenv("LEAGUE_ID", "1"))
 #
 # (We use separate fields so % in password is fine.)
 def get_conn():
+    # 1️⃣ Preferred: single connection string (Render / Supabase)
+    db_url = os.getenv("DATABASE_URL")
+    if db_url:
+        return psycopg2.connect(db_url, sslmode="require")
+
+    # 2️⃣ Fallback: discrete PG* vars (local / legacy)
     host = os.getenv("PGHOST", "").strip()
     password = os.getenv("PGPASSWORD", "")
 
     if not host or not password:
         raise RuntimeError(
-            "Postgres env vars not set. In CMD set PGHOST/PGDATABASE/PGUSER/PGPASSWORD/PGPORT."
+            "Postgres env vars not set. Set DATABASE_URL (recommended) "
+            "or PGHOST/PGDATABASE/PGUSER/PGPASSWORD/PGPORT."
         )
 
     return psycopg2.connect(
