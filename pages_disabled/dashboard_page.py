@@ -24,13 +24,12 @@ def compute_result_from_score(score: str):
     return "DRAW"
 
 @st.cache_data(ttl=300)
-def _season_mmr_map(player_ids: tuple[int, ...], season_start: str):
+def _season_mmr_map(player_rows: tuple[tuple[int, float], ...], season_start: str):
     conn = get_conn()
     try:
         out = {}
-        for pid in player_ids:
-            # "current_mmr" isn't important for season reset display; pass 1000 safely
-            out[int(pid)] = float(get_season_mmr(conn, int(pid), season_start, float(STARTING_MMR)))
+        for pid, current_mmr in player_rows:
+            out[int(pid)] = float(get_season_mmr(conn, int(pid), season_start, float(current_mmr)))
         return out
     finally:
         conn.close()
@@ -45,12 +44,24 @@ def render_dashboard_page():
         divider=True,
     )
 
-    # --- Load data ---
     dfp = load_players_df()
-    # Map DB name -> display name (fallback to DB name if missing)
-    name_map = dict(zip(dfp["name"], dfp.get("display_name", dfp["name"])))
+
+    # Case-insensitive map: any casing of name/display_name -> current display_name
+    alias_map = {}
+    for _, r in dfp.iterrows():
+        base = str(r.get("name") or "").strip()
+        dispn = str(r.get("display_name") or "").strip() or base
+
+        if base:
+            alias_map[base.lower()] = dispn
+        if dispn:
+            alias_map[dispn.lower()] = dispn
+
     def disp(n: str) -> str:
-        return name_map.get(n, n)
+        s = str(n or "").strip()
+        if not s:
+            return s
+        return alias_map.get(s.lower(), s)
 
     dfm = load_matches_df()
     dfm['processed'] = dfm['processed'].astype(int)
@@ -146,13 +157,18 @@ def render_dashboard_page():
 
 
     if season_mode == "Single Year (season reset)" and season_start:
-        ids = tuple(int(x) for x in dfp["id"].tolist())
-        mmr_map = _season_mmr_map(ids, season_start)
+        player_rows = tuple((int(pid), float(mmr)) for pid, mmr in zip(dfp["id"].tolist(), dfp["mmr"].tolist()))
+        mmr_map = _season_mmr_map(player_rows, season_start)
         dfp["_display_mmr"] = dfp["id"].map(mmr_map).astype(float)
     else:
         dfp["_display_mmr"] = dfp["mmr"].astype(float)
 
-    top_player = dfp.loc[dfp["_display_mmr"].idxmax(), "name"] if not dfp.empty else "N/A"
+    # Top player should be among players who actually played in the selected period
+    dfp_rank = dfp[dfp["name"].astype(str).str.strip().str.lower().isin(
+        {str(p).strip().lower() for p in players_played}
+    )].copy()
+
+    top_player = dfp_rank.loc[dfp_rank["_display_mmr"].idxmax(), "name"] if not dfp_rank.empty else "N/A"
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("🧑‍🤝‍🧑 Total Players", total_players)
@@ -333,8 +349,8 @@ def render_dashboard_page():
     # 🔹 Add MMR column from players table
     df_mmr = dfp[["id", "name", "display_name", "mmr"]].copy()
     if season_mode == "Single Year (season reset)" and season_start:
-        ids = tuple(int(x) for x in df_mmr["id"].tolist())
-        mmr_map = _season_mmr_map(ids, season_start)
+        player_rows = tuple((int(pid), float(mmr)) for pid, mmr in zip(df_mmr["id"].tolist(), df_mmr["mmr"].tolist()))
+        mmr_map = _season_mmr_map(player_rows, season_start)
         df_mmr["MMR"] = df_mmr["id"].map(mmr_map).astype(float).round(1)
     else:
         df_mmr["MMR"] = df_mmr["mmr"].astype(float).round(1)

@@ -13,6 +13,7 @@ def get_supabase():
 
 
 def is_authed() -> bool:
+    # Keep your existing contract: authed if sb_session dict exists
     return bool(st.session_state.get("sb_session"))
 
 
@@ -22,50 +23,104 @@ def sb_client_authed():
     Useful for league_members / league_invites tables (and later RLS).
     """
     sb = get_supabase()
-    sess = st.session_state.get("sb_session")
-    if sess and sess.get("access_token"):
-        sb.postgrest.auth(sess["access_token"])
+    sess = st.session_state.get("sb_session") or {}
+    token = sess.get("access_token")
+    if token:
+        sb.postgrest.auth(token)
     return sb
 
 
 def login_ui():
-    st.subheader("🔐 Login")
+    sb = get_supabase()
+
+    # Web-style mode toggle
+    if "auth_mode" not in st.session_state:
+        st.session_state["auth_mode"] = "login"  # "login" or "signup"
+
+    mode = st.session_state["auth_mode"]
+
+    st.subheader("🔐 Login" if mode == "login" else "🆕 Create account")
 
     email = st.text_input("Email", key="login_email")
     password = st.text_input("Password", type="password", key="login_pw")
 
-    c1, c2 = st.columns(2)
-    sb = get_supabase()
+    confirm = None
+    if mode == "signup":
+        confirm = st.text_input("Confirm password", type="password", key="signup_confirm")
 
-    with c1:
-        if st.button("Login", use_container_width=True):
-            try:
-                res = sb.auth.sign_in_with_password({"email": email, "password": password})
-                st.session_state.sb_session = {
-                    "access_token": res.session.access_token,
-                    "refresh_token": res.session.refresh_token,
-                    "user_id": res.user.id,
-                    "email": res.user.email,
-                }
-                st.success("Logged in.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Login failed: {e}")
+    st.markdown("")
 
-    with c2:
-        if st.button("Create account", use_container_width=True):
-            try:
-                sb.auth.sign_up({"email": email, "password": password})
-                st.info("Account created. If email confirmation is enabled, check your inbox.")
-            except Exception as e:
-                st.error(f"Sign-up failed: {e}")
+    submit_label = "Login" if mode == "login" else "Create account"
+    submitted = st.button(submit_label, use_container_width=True, key="auth_submit")
+
+    if mode == "login":
+        st.caption("Don’t have an account?")
+        if st.button("Create one", key="switch_to_signup"):
+            st.session_state["auth_mode"] = "signup"
+            st.rerun()
+    else:
+        st.caption("Already have an account?")
+        if st.button("Login instead", key="switch_to_login"):
+            st.session_state["auth_mode"] = "login"
+            st.rerun()
+
+    if not submitted:
+        return
+
+    # Validate only on submit (stops the “random backend error” UX)
+    email_clean = (email or "").strip()
+    if not email_clean:
+        st.error("Please enter your email.")
+        return
+    if not password:
+        st.error("Please enter your password.")
+        return
+
+    if mode == "signup":
+        if not confirm:
+            st.error("Please confirm your password.")
+            return
+        if password != confirm:
+            st.error("Passwords don’t match.")
+            return
+        if len(password) < 6:
+            st.error("Password must be at least 6 characters.")
+            return
+
+        try:
+            sb.auth.sign_up({"email": email_clean, "password": password})
+            st.success("Account created.")
+            # Optional: flip back to login mode after signup
+            st.session_state["auth_mode"] = "login"
+        except Exception as e:
+            st.error(f"Sign-up failed: {e}")
+        return
+
+    # Login
+    try:
+        res = sb.auth.sign_in_with_password({"email": email_clean, "password": password})
+
+        # Keep your exact session dict format used elsewhere
+        st.session_state.sb_session = {
+            "access_token": res.session.access_token,  # type: ignore
+            "refresh_token": res.session.refresh_token,  # type: ignore
+            "user_id": res.user.id,  # type: ignore
+            "email": res.user.email,  # type: ignore
+        }
+
+        st.success("Logged in.")
+        st.rerun()
+    except Exception as e:
+        st.error(f"Login failed: {e}")
 
 
 def logout_ui():
-    if st.button("Logout", use_container_width=True):
+    if st.sidebar.button("Logout", use_container_width=True, key="logout_btn"):
         st.session_state.pop("sb_session", None)
         st.session_state.pop("league_id", None)
         st.session_state.pop("league_name", None)
         st.session_state.pop("league_role", None)
+
+        # Keep your current behaviour
         st.cache_data.clear()
         st.rerun()

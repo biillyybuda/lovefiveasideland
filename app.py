@@ -64,11 +64,6 @@ if not is_authed():
     login_ui()
     st.stop()
 
-# Logged in → show logout in sidebar
-st.sidebar.markdown("---")
-logout_ui()
-st.sidebar.markdown("---")
-
 # -----------------------------
 # INVITE FLOW (optional)
 # -----------------------------
@@ -92,9 +87,39 @@ if not st.session_state.get("league_id"):
 
 # At this point we are logged in and have a league selected
 st.sidebar.success(f"League: {st.session_state.get('league_name', st.session_state['league_id'])}")
+st.sidebar.markdown("---")
+
+# Profile Settings (everyone)
+if st.sidebar.button("👤 Profile Settings", use_container_width=True):
+    st.session_state["_nav_target"] = "Profile Settings"
+    st.rerun()
+
+# Join / Invite (everyone)
+if st.sidebar.button("🔗 Join / Invite", use_container_width=True):
+    st.session_state["_nav_target"] = "Join / Invite"
+    st.rerun()
+
+# League Admin (admins only)
+role = (st.session_state.get("league_role") or "").lower()
+if role in ("admin", "owner"):
+    if st.sidebar.button("⚙️ League Admin", use_container_width=True):
+        st.session_state["_nav_target"] = "League Admin"
+        st.rerun()
+
+st.sidebar.markdown("---")
+
 
 # -----------------------------
-# PAGE REGISTRY (unchanged)
+# PLAYER LINK GATE (Step B)
+# -----------------------------
+from utils.player_link_utils import ensure_player_linked_ui
+
+ensure_player_linked_ui()
+
+
+
+# -----------------------------
+# PAGE REGISTRY
 # -----------------------------
 ON_RENDER = os.environ.get("RENDER") is not None
 
@@ -116,19 +141,27 @@ else:
         "Charts & Stats": ("pages_disabled.charts_page", "render_charts_page"),
         "Matchday Hub": ("pages_disabled.matchday_hub_page", "render_matchday_hub_page"),
         "Season Review": ("pages_disabled.season_review_page", "render_season_review_page"),
-        "Matches Management": ("pages_disabled.matches_page", "render_matches_page"),
-        "Player Management": ("pages_disabled.player_management_page", "render_player_management_page"),
         "Info": ("pages_disabled.info_page", "render_info_page"),
     }
     if st.session_state.get("page") == "Charts":
         st.session_state["page"] = "Charts & Stats"
 
+# Hidden pages: available via buttons/_nav_target, but not shown in dropdown
+HIDDEN_PAGES = {
+    "League Admin": ("pages_disabled.league_admin_page", "render_league_admin_page"),
+    "Profile Settings": ("pages_disabled.profile_settings_page", "render_profile_settings_page"),
+    "Join / Invite": ("pages_disabled.join_invite_page", "render_join_invite_page"),
+}
+
 # -----------------------------
-# NAV OVERRIDES (unchanged)
+# NAV OVERRIDES
 # -----------------------------
 if "_nav_target" in st.session_state:
     target = st.session_state.pop("_nav_target")
-    st.session_state["page"] = target if target in PAGES else "Home"
+    if target in PAGES or target in HIDDEN_PAGES:
+        st.session_state["page"] = target
+    else:
+        st.session_state["page"] = "Home"
 
 if "page" not in st.session_state:
     st.session_state["page"] = "Home"
@@ -136,15 +169,22 @@ if "page" not in st.session_state:
 # Only show page dropdown AFTER auth+league selection
 st.sidebar.selectbox(
     "",
-    list(PAGES.keys()),
+    list(PAGES.keys()),   # League Admin not included
     key="page",
     label_visibility="collapsed",
 )
+st.sidebar.markdown("---")
+
+# Logout (bottom-ish)
+logout_ui()
+st.sidebar.markdown("---")
+
 
 # -----------------------------
-# ROUTER (unchanged)
+# ROUTER
 # -----------------------------
 choice = st.session_state["page"]
-module_path, func_name = PAGES[choice]
+registry = PAGES if choice in PAGES else HIDDEN_PAGES
+module_path, func_name = registry[choice]
 mod = __import__(module_path, fromlist=[func_name])
 getattr(mod, func_name)()
