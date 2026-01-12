@@ -83,7 +83,9 @@ if not st.session_state.get("league_id"):
     ok = league_selector_ui()
     if not ok:
         st.stop()
-    # if ok + auto-selected, continue
+
+    # ✅ IMPORTANT: rerun so we don't render the next page under the selector UI
+    st.rerun()
 
 # At this point we are logged in and have a league selected
 st.sidebar.success(f"League: {st.session_state.get('league_name', st.session_state['league_id'])}")
