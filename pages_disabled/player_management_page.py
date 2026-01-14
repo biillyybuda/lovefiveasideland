@@ -16,24 +16,36 @@ from utils.names import canonical_name, display_name
 
 
 def ensure_player_schema():
-    """Ensure required columns exist in DB (incl. archive fields)."""
+    """Ensure required columns exist in DB (SQLite + Postgres safe)."""
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("PRAGMA table_info(players)")
-    cols = [c[1] for c in cur.fetchall()]
 
-    # Existing fields you already use
+    # --- Detect existing columns (Postgres vs SQLite) ---
+    try:
+        # Postgres / Supabase
+        cur.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'players'
+        """)
+        cols = [r[0] for r in cur.fetchall()]
+    except Exception:
+        # SQLite fallback
+        cur.execute("PRAGMA table_info(players)")
+        cols = [c[1] for c in cur.fetchall()]
+
+    # --- Schema updates ---
     if "strengths" not in cols:
         cur.execute("ALTER TABLE players ADD COLUMN strengths TEXT DEFAULT ''")
+
     if "fitness" not in cols:
         cur.execute("ALTER TABLE players ADD COLUMN fitness TEXT DEFAULT 'Medium'")
+
     if "display_name" not in cols:
         cur.execute("ALTER TABLE players ADD COLUMN display_name TEXT DEFAULT ''")
 
-    # ✅ New: archive / soft-delete fields
     if "is_active" not in cols:
-        cur.execute("ALTER TABLE players ADD COLUMN is_active INTEGER DEFAULT 1")  # 1=active, 0=archived
-        # If table already had rows, make sure NULLs become active
+        cur.execute("ALTER TABLE players ADD COLUMN is_active INTEGER DEFAULT 1")
         cur.execute("UPDATE players SET is_active=1 WHERE is_active IS NULL")
 
     if "archived_at" not in cols:

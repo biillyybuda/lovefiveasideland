@@ -22,6 +22,19 @@ def _players_table_cached():
     finally:
         conn.close()
 
+def _name_ui(name: str, players_df: pd.DataFrame) -> str:
+    """Return DB display_name if present, else fall back to _display_name()."""
+    try:
+        row = players_df[players_df["name"] == name]
+        if not row.empty and "display_name" in row.columns:
+            dn = str(row.iloc[0].get("display_name") or "").strip()
+            if dn:
+                return dn
+    except Exception:
+        pass
+    return _display_name(name)
+
+
 
 def _round_numeric(df: pd.DataFrame, dp: int = 1) -> pd.DataFrame:
     out = df.copy()
@@ -712,7 +725,7 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
                     Lineup
                 </div>
                 <div style="line-height:1.7;">
-                    {'<br>'.join([f"<span class='nameA' style='--a1:{teamA_fg};--b1:{teamB_fg};'>{_display_name(p)}</span>" for p in team_a])}
+                    {'<br>'.join([f"<span class='nameA' style='--a1:{teamA_fg};--b1:{teamB_fg};'>{_name_ui(p, players_df)}</span>" for p in team_a])}
                 </div>
             </div>
             """,
@@ -728,7 +741,7 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
                     Lineup
                 </div>
                 <div style="line-height:1.7;">
-                    {'<br>'.join([f"<span class='nameB' style='--a1:{teamA_fg};--b1:{teamB_fg};'>{_display_name(p)}</span>" for p in team_b])}
+                    {'<br>'.join([f"<span class='nameB' style='--a1:{teamA_fg};--b1:{teamB_fg};'>{_name_ui(p, players_df)}</span>" for p in team_b])}
                 </div>
             </div>
             """,
@@ -816,7 +829,7 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
 
             return f"""
     <div style="background:linear-gradient(135deg, {bg} 0%, rgba(0,0,0,0) 70%);border:1px solid rgba(255,255,255,0.10);padding:14px 16px;border-radius:16px;margin-bottom:12px;box-shadow:0 0 12px rgba(0,0,0,0.65);">
-      <div style="font-size:1.05rem;font-weight:900;margin-bottom:6px;color:{fg};">{_display_name(name)}</div>
+      <div style="font-size:1.05rem;font-weight:900;margin-bottom:6px;color:{fg};">{_name_ui(name, players_df)}</div>
       <div style="color:#d9d9d9;font-size:0.92rem;line-height:1.55;">
         <div><span style="color:#9ae6ff;">MMR:</span> <b>{mmr_txt if mmr_txt else "—"}</b> <span style="opacity:0.85;">{streak_txt}</span></div>
         <div><span style="color:#c6afff;">Career:</span> {ps["matches_played"]} matches · {ps["win_pct"]:.1f}% wins</div>
@@ -824,8 +837,8 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
     <div style="height:1px;background:rgba(255,255,255,0.10);margin:8px 0;"></div>
 
 
-        <div><span style="color:#22c55e;">Best teammate:</span> {_display_name(best_tm) if best_tm else "—"}</div>
-        <div><span style="color:#f97316;">This week's rival:</span> {_display_name(this_rival) if this_rival else "—"}</div>
+        <div><span style="color:#22c55e;">Best teammate:</span> {_name_ui(best_tm, players_df) if best_tm else "—"}</div>
+        <div><span style="color:#f97316;">This week's rival:</span> {_name_ui(this_rival, players_df) if this_rival else "—"}</div>
       </div>
     </div>
     """
@@ -909,10 +922,10 @@ def render_team_generator_page(show_header: bool = True):
     if captain_mode:
         c1, c2 = st.columns(2)
         with c1:
-            captainA = st.selectbox("Captain A", [""] + names, index=0, format_func=_display_name)
+            captainA = st.selectbox("Captain A", [""] + names, index=0, format_func=lambda n: _name_ui(n, players_df))
         with c2:
             remaining = [n for n in names if n != captainA]
-            captainB = st.selectbox("Captain B", [""] + remaining, index=0, format_func=_display_name)
+            captainB = st.selectbox("Captain B", [""] + remaining, index=0, format_func=lambda n: _name_ui(n, players_df))
 
     # Player selection (blank by default feels intentional)
     sel = st.multiselect(
@@ -1055,21 +1068,23 @@ def render_team_generator_page(show_header: bool = True):
         )
 
         # Clean matchup card (no repeated sub-headers)
-        boxA = "<div style='background:rgba(59,130,246,0.10);border:1px solid rgba(59,130,246,0.25);border-radius:12px;padding:10px 12px;'>" \
-               + "<div style=\"font-weight:800;margin-bottom:6px;\">" \
-               + f"Avg MMR {a_eff:.0f}" \
-               + "</div>" \
-               + "<div style=\"line-height:1.7;\">" \
-               + "<br>".join([_display_name(p) for p in disp_A]) \
-               + "</div></div>"
+        boxA = f"""
+        <div style='background:{palA["bg"]};border:1px solid {palA["fg"]}40;border-radius:12px;padding:10px 12px;'>
+        <div style="font-weight:800;margin-bottom:6px;">Avg MMR {a_eff:.0f}</div>
+        <div style="line-height:1.7;">
+            {'<br>'.join(_name_ui(p, players_df) for p in disp_A)}
+        </div>
+        </div>
+        """
 
-        boxB = "<div style='background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.25);border-radius:12px;padding:10px 12px;text-align:right;'>" \
-               + "<div style=\"font-weight:800;margin-bottom:6px;\">" \
-               + f"Avg MMR {b_eff:.0f}" \
-               + "</div>" \
-               + "<div style=\"line-height:1.7;\">" \
-               + "<br>".join([_display_name(p) for p in disp_B]) \
-               + "</div></div>"
+        boxB = f"""
+        <div style='background:{palB["bg"]};border:1px solid {palB["fg"]}40;border-radius:12px;padding:10px 12px;text-align:right;'>
+        <div style="font-weight:800;margin-bottom:6px;">Avg MMR {b_eff:.0f}</div>
+        <div style="line-height:1.7;">
+            {'<br>'.join(_name_ui(p, players_df) for p in disp_B)}
+        </div>
+        </div>
+        """
         cL, cR = st.columns(2)
         with cL:
             st.markdown(boxA, unsafe_allow_html=True)

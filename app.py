@@ -153,7 +153,8 @@ HIDDEN_PAGES = {
     "League Admin": ("pages_disabled.league_admin_page", "render_league_admin_page"),
     "Profile Settings": ("pages_disabled.profile_settings_page", "render_profile_settings_page"),
     "Join / Invite": ("pages_disabled.join_invite_page", "render_join_invite_page"),
-}
+    "Matches Management": ("pages_disabled.matches_page", "render_matches_page"),
+    "Player Management": ("pages_disabled.player_management_page", "render_player_management_page"),}
 
 # -----------------------------
 # NAV OVERRIDES
@@ -169,9 +170,16 @@ if "page" not in st.session_state:
     st.session_state["page"] = "Home"
 
 # Only show page dropdown AFTER auth+league selection
+page_options = list(PAGES.keys())
+
+# ✅ If we are currently on a hidden page, include it so Streamlit doesn't bounce us back
+current_page = st.session_state.get("page")
+if current_page in HIDDEN_PAGES and current_page not in page_options:
+    page_options = [current_page] + page_options
+
 st.sidebar.selectbox(
     "",
-    list(PAGES.keys()),   # League Admin not included
+    page_options,
     key="page",
     label_visibility="collapsed",
 )
