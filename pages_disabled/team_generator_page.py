@@ -7,6 +7,10 @@ import hashlib
 import json
 from fractions import Fraction
 import math
+import textwrap
+from utils.betting_markets import build_markets, blended_expected_goals
+
+
 
 from utils.db_utils import load_players_df, get_conn as open_db
 from utils.team_ai_engine import evaluate_teams, get_engine_state, clean_name
@@ -33,6 +37,7 @@ def _name_ui(name: str, players_df: pd.DataFrame) -> str:
     except Exception:
         pass
     return _display_name(name)
+    
 
 
 
@@ -104,6 +109,25 @@ def _df_with_display_names(df: pd.DataFrame) -> pd.DataFrame:
                 pass
     return out_df
 
+def expected_goals(avg_mmr_a, avg_mmr_b):
+    base_goals = 6.8  # league-wide average
+    mmr_diff = avg_mmr_a - avg_mmr_b
+
+    team_a_goals = base_goals/2 + (mmr_diff / 100)
+    team_b_goals = base_goals/2 - (mmr_diff / 100)
+
+    return max(1.0, team_a_goals), max(1.0, team_b_goals)
+
+def prob_to_odds(p):
+    if p <= 0:
+        return "—"
+    odds = 1 / p
+    return f"{odds:.2f}".replace(".00", "")
+def decimal_to_fraction(decimal):
+    from fractions import Fraction
+    f = Fraction(decimal - 1).limit_denominator(20)
+    return f"{f.numerator}/{f.denominator}"
+
 
 
 def _parse_team_list(val):
@@ -122,6 +146,230 @@ def _parse_score(score_str):
     except Exception:
         pass
     return None, None
+
+def _team_key_set(team: list[str]) -> set[str]:
+    return {clean_name(p) for p in (team or []) if str(p).strip()}
+
+def _overlap_count(team_now: list[str], team_hist: list[str]) -> int:
+    return len(_team_key_set(team_now) & _team_key_set(team_hist))
+
+def _diff_players(team_now: list[str], team_hist: list[str]) -> tuple[list[str], list[str]]:
+    """
+    Returns (subbed_in_now, missing_from_now) compared to a historical team.
+    - subbed_in_now: players in current team but not in the historical team
+    - missing_from_now: players in historical team but not in the current team
+    """
+    now_set = _team_key_set(team_now)
+    hist_set = _team_key_set(team_hist)
+
+    subbed_in = [p for p in team_now if clean_name(p) not in hist_set]
+    missing = [p for p in team_hist if clean_name(p) not in now_set]
+    return subbed_in, missing
+
+def _best_similar_meetings(
+    team_a_now: list[str],
+    team_b_now: list[str],
+    matches_eng: pd.DataFrame,
+    top_n: int = 1,
+    min_side_overlap: int = 3,
+) -> list[dict]:
+    """
+    Find best historical matches similar to current (Team A vs Team B), allowing side swaps.
+
+    Scoring:
+      - overlapA + overlapB (same orientation)
+      - overlapA_swapped + overlapB_swapped (swapped orientation)
+    Tie-breakers:
+      - prefer higher "min(overlapA, overlapB)" (i.e., both sides similar)
+      - prefer most recent (by date) if available
+    """
+    if matches_eng is None or not isinstance(matches_eng, pd.DataFrame) or matches_eng.empty:
+        return []
+
+    df = matches_eng.copy()
+
+    # Ensure date sortable
+    if "date" in df.columns:
+        df["__dt"] = pd.to_datetime(df["date"], errors="coerce")
+    else:
+        df["__dt"] = pd.NaT
+
+    rows = []
+    for _, r in df.iterrows():
+        ta_hist = _parse_team_list(r.get("team_a", ""))
+        tb_hist = _parse_team_list(r.get("team_b", ""))
+
+        if not ta_hist or not tb_hist:
+            continue
+
+        # Orientation 1: (A_now ~ A_hist) and (B_now ~ B_hist)
+        oa1 = _overlap_count(team_a_now, ta_hist)
+        ob1 = _overlap_count(team_b_now, tb_hist)
+        score1 = oa1 + ob1
+
+        # Orientation 2 (swapped): (A_now ~ B_hist) and (B_now ~ A_hist)
+        oa2 = _overlap_count(team_a_now, tb_hist)
+        ob2 = _overlap_count(team_b_now, ta_hist)
+        score2 = oa2 + ob2
+
+        if score2 > score1:
+            orientation = "swapped"
+            oa, ob, score = oa2, ob2, score2
+            hist_A = tb_hist
+            hist_B = ta_hist
+        else:
+            orientation = "same"
+            oa, ob, score = oa1, ob1, score1
+            hist_A = ta_hist
+            hist_B = tb_hist
+
+        # Require at least "min_any_side_overlap" on at least one side (or exact-ish overall)
+        # STRICT: must be at least 3-overlap on BOTH sides (3v3 and up)
+        if oa < min_side_overlap or ob < min_side_overlap:
+            continue
+
+        gA, gB = _parse_score(r.get("score", ""))
+        res = str(r.get("result") or "").upper().strip()
+
+        rows.append(
+            {
+                "score": int(score),
+                "overlap_a": int(oa),
+                "overlap_b": int(ob),
+                "min_overlap": int(min(oa, ob)),
+                "orientation": orientation,
+                "hist_team_a": hist_A,
+                "hist_team_b": hist_B,
+                "raw_team_a": ta_hist,
+                "raw_team_b": tb_hist,
+                "match_id": r.get("id", None),
+                "date": r.get("date", None),
+                "__dt": r.get("__dt", pd.NaT),
+                "scoreline": r.get("score", ""),
+                "result": res,
+                "venue": r.get("venue", ""),
+            }
+        )
+
+    if not rows:
+        return []
+
+    out = pd.DataFrame(rows)
+
+    # Sort: best similarity first, then "both sides similar", then most recent
+    out = out.sort_values(
+        by=["score", "min_overlap", "__dt"],
+        ascending=[False, False, False],
+        na_position="last",
+    )
+
+    # Take top_n, but ensure we include exact matches first if any
+    return out.head(top_n).to_dict(orient="records")
+
+def _render_previous_meetings_block(team_a: list[str], team_b: list[str], matches_eng: pd.DataFrame, players_df: pd.DataFrame):
+    meetings = _best_similar_meetings(team_a, team_b, matches_eng, top_n=1, min_side_overlap=3)
+    if not meetings:
+        return  # silent if requirements not met
+
+    m = meetings[0]
+    histA = m["hist_team_a"]
+    histB = m["hist_team_b"]
+
+    sub_in_A, missing_A = _diff_players(team_a, histA)
+    sub_in_B, missing_B = _diff_players(team_b, histB)
+
+    def dn(x): 
+        return _name_ui(x, players_df)
+
+    # Pair OUT -> IN (same count typically)
+    def pair_swaps(missing, subbed_in):
+        k = max(len(missing), len(subbed_in))
+        pairs = []
+        for i in range(k):
+            outp = dn(missing[i]) if i < len(missing) else "—"
+            inp = dn(subbed_in[i]) if i < len(subbed_in) else "—"
+            pairs.append((outp, inp))
+        return pairs
+
+    swaps_A = pair_swaps(missing_A, sub_in_A)
+    swaps_B = pair_swaps(missing_B, sub_in_B)
+
+    date_txt = str(m.get("date") or "").strip()
+    score_txt = str(m.get("scoreline") or "").strip()
+    meta_txt = " · ".join([t for t in [date_txt] if t])
+
+    # Try to split score for big display
+    gA, gB = _parse_score(score_txt)
+    if gA is None or gB is None:
+        big_score = score_txt if score_txt else "—"
+    else:
+        big_score = f"{gA}–{gB}"
+
+    # Build pills for lineups, highlighting players NOT involved today (red)
+    todayA = {clean_name(x) for x in team_a}
+    todayB = {clean_name(x) for x in team_b}
+
+    def lineup_pills(hist_team, today_set):
+        pills = []
+        for p in hist_team:
+            cls = "out" if clean_name(p) not in today_set else "active"
+            pills.append(f"<span class='pm-pill {cls}'>{dn(p)}</span>")
+        return "".join(pills)
+
+    # Sub rows as OUT (red) -> IN (green)
+    def subs_rows(pairs):
+        if not pairs or all(a == "—" and b == "—" for a, b in pairs):
+            return "<div class='pm-meta'>No changes vs today</div>"
+
+        rows = []
+        for outp, inp in pairs:
+            rows.append(
+                "<div class='pm-subrow'>"
+                f"<span class='pm-pill out'>{outp}</span>"
+                "<span class='pm-arrow'>→</span>"
+                f"<span class='pm-pill in'>{inp}</span>"
+                "</div>"
+            )
+        return "<div class='pm-subs'>" + "".join(rows) + "</div>"
+
+    html = f"""
+<div class="pm-top pm-scorebar">
+  <div class="pm-meta" style="text-align:center;width:100%;">{meta_txt}</div>
+
+  <div class="pm-scoreline">
+    <span class="pm-scoreteam pm-a">Team A</span>
+    <span class="pm-score">{big_score}</span>
+    <span class="pm-scoreteam pm-b">Team B</span>
+  </div>
+</div>
+
+  <div class="pm-grid">
+    <div class="pm-team a">
+        <div class="pm-team-h">
+            <span>Team A Lineup</span>
+        </div>
+
+      <div class="pm-line">{lineup_pills(histA, todayA)}</div>
+
+      <div class="pm-subtitle">Changes vs today</div>
+      {subs_rows(swaps_A)}
+    </div>
+
+    <div class="pm-team b">
+        <div class="pm-team-h">
+            <span>Team B Lineup</span>
+        </div>
+
+      <div class="pm-line">{lineup_pills(histB, todayB)}</div>
+
+      <div class="pm-subtitle">Changes vs today</div>
+      {subs_rows(swaps_B)}
+    </div>
+  </div>
+</div>
+"""
+    st.html(textwrap.dedent(html))
+
 
 def _ensure_session_defaults():
     if "tg_top_matchups" not in st.session_state:
@@ -616,6 +864,156 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
         .odd .val {font-size:1.2rem;font-weight:900;}
         .odd .pct {font-size:0.85rem;color:#cfcfcf;opacity:0.9;}
         .muted {color:#bdbdbd;font-size:0.95rem;}
+        .pm-card{
+        border-radius:16px;
+        padding:16px 18px;
+        border:1px solid rgba(255,255,255,0.10);
+        background:linear-gradient(180deg, rgba(255,255,255,0.05), rgba(0,0,0,0.0));
+        box-shadow:0 0 16px rgba(0,0,0,0.55);
+        margin-top:10px;
+        }
+        .pm-top{
+        display:flex;
+        align-items:center;
+        margin-bottom:6px;
+        }
+        .pm-scorebar{
+        flex-direction:column;
+        justify-content:center;
+        gap:6px;
+        margin-bottom:12px;
+        }
+
+        .pm-scoreline{
+        display:flex;
+        justify-content:center;
+        align-items:baseline;
+        gap:18px;
+        }
+
+        .pm-scoreteam{
+        font-size:3rem;          /* match the score size */
+        font-weight:1000;
+        letter-spacing:0.5px;
+        text-shadow:0 3px 20px rgba(0,0,0,0.65);
+        opacity:0.95;
+        white-space:nowrap;
+        }
+
+        .pm-scoreteam.pm-a{ color:#93c5fd; }
+        .pm-scoreteam.pm-b{ color:#fca5a5; }
+
+        .pm-title{
+        font-weight:900;
+        font-size:1.25rem;
+        display:flex;
+        align-items:center;
+        gap:10px;
+        }
+        .pm-meta{
+        color:#cfcfcf;
+        opacity:0.9;
+        font-size:0.95rem;
+        }
+        .pm-score{
+        font-size:3rem;
+        font-weight:1000;
+        letter-spacing:1px;
+        color:#ffffff;
+        text-shadow:0 3px 20px rgba(0,0,0,0.65);
+        }
+        .pm-grid{
+        display:grid;
+        grid-template-columns: 1fr 1fr;
+        gap:14px;
+        }
+        .pm-team{
+        border-radius:14px;
+        padding:12px 14px;
+        border:1px solid rgba(255,255,255,0.10);
+        background:rgba(255,255,255,0.03);
+        }
+        .pm-team.a{
+        background:linear-gradient(135deg, rgba(59,130,246,0.14), rgba(255,255,255,0.02));
+        border:1px solid rgba(59,130,246,0.22);
+        }
+        .pm-team.b{
+        background:linear-gradient(225deg, rgba(239,68,68,0.14), rgba(255,255,255,0.02));
+        border:1px solid rgba(239,68,68,0.22);
+        }
+        .pm-team-h{
+        display:flex;
+        justify-content:space-between;
+        align-items:center;
+        }
+        .pm-badge{
+        font-size:0.85rem;
+        font-weight:900;
+        padding:4px 10px;
+        border-radius:999px;
+        border:1px solid rgba(255,255,255,0.12);
+        background:rgba(255,255,255,0.04);
+        color:#eaeaea;
+        }
+
+        .pm-team-h{
+        font-weight:900;
+        font-size:1.05rem;
+        margin-bottom:8px;
+        }
+        .pm-line{
+        display:flex;
+        flex-wrap:wrap;
+        gap:8px;
+        }
+        .pm-pill{
+        padding:6px 10px;
+        border-radius:999px;
+        font-weight:800;
+        font-size:0.98rem;
+        border:1px solid rgba(255,255,255,0.10);
+        background:rgba(255,255,255,0.04);
+        }
+        .pm-pill.out{
+        background:rgba(239,68,68,0.22);
+        border:1px solid rgba(239,68,68,0.55);
+        color:#ffe4e6;
+        box-shadow:0 0 10px rgba(239,68,68,0.15);
+        }
+        .pm-pill.active{
+        background:rgba(255,255,255,0.06);
+        border:1px solid rgba(255,255,255,0.14);
+        }
+        .pm-pill.in{
+        background:rgba(34,197,94,0.14);
+        border:1px solid rgba(34,197,94,0.35);
+        color:#bbf7d0;
+        }
+        .pm-subtitle{
+        margin-top:10px;
+        color:#bdbdbd;
+        font-size:0.95rem;
+        font-weight:800;
+        opacity:0.95;
+        }
+        .pm-subs{
+        margin-top:6px;
+        display:flex;
+        flex-direction:column;
+        gap:8px;
+        }
+        .pm-subrow{
+        display:flex;
+        align-items:center;
+        gap:10px;
+        font-weight:900;
+        font-size:1.05rem;
+        }
+        .pm-arrow{
+        opacity:0.9;
+        font-size:1.1rem;
+        }
+
         </style>
         """,
         unsafe_allow_html=True,
@@ -657,28 +1055,51 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
     a_mmr = _mean_mmr(team_a)
     b_mmr = _mean_mmr(team_b)
 
-    # expected_score_calibrated -> P(A win) + 0.5*P(draw)
-    pE = _expected_score_league_calibrated(a_mmr, b_mmr)
-    pA_win, pDraw, pB_win = _compute_1x2(pE, matches_eng) # type: ignore
+    mmr_lam_a, mmr_lam_b = expected_goals(a_mmr, b_mmr)
 
-    oddA, oddX, oddB = _book_odds(pA_win, pDraw, pB_win, overround=1.06)
+    # Blend in historical scoring (uses DB match scores)
+    lam_a, lam_b, lam_dbg = blended_expected_goals(team_a, team_b, mmr_lam_a, mmr_lam_b)
 
-    # Snap to bookmaker "price ladder" for nicer, realistic-looking prices
-    labA, oddA_s = _snap_decimal_to_bookie_ladder(oddA)
-    labX, oddX_s = _snap_decimal_to_bookie_ladder(oddX)
-    labB, oddB_s = _snap_decimal_to_bookie_ladder(oddB)
+    markets = build_markets(
+        lam_a,
+        lam_b,
+        overround=1.06,
+        max_goals=15,
+        total_lines=None,
+        include_alt_lines=True,
+    )
 
-    # Implied probabilities from snapped bookie prices (will include margin)
-    try:
-        impA = 1.0 / float(oddA_s)
-        impX = 1.0 / float(oddX_s)
-        impB = 1.0 / float(oddB_s)
-        impsum = impA + impX + impB
-        pA_disp = impA / impsum
-        pX_disp = impX / impsum
-        pB_disp = impB / impsum
-    except Exception:
-        pA_disp, pX_disp, pB_disp = pA_win, pDraw, pB_win
+
+    # --- Top odds should match Betting Markets engine (markets["match_odds"]) ---
+    mx = markets.get("match_odds", {}).get("prices", {})
+
+    # Fallback (if match_odds missing for any reason): keep the old logic
+    if not mx:
+        pE = _expected_score_league_calibrated(a_mmr, b_mmr)
+        pA_win, pDraw, pB_win = _compute_1x2(pE, matches_eng)  # type: ignore
+        oddA, oddX, oddB = _book_odds(pA_win, pDraw, pB_win, overround=1.06)
+        labA, oddA_s = _snap_decimal_to_bookie_ladder(oddA)
+        labX, oddX_s = _snap_decimal_to_bookie_ladder(oddX)
+        labB, oddB_s = _snap_decimal_to_bookie_ladder(oddB)
+        try:
+            impA = 1.0 / float(oddA_s)
+            impX = 1.0 / float(oddX_s)
+            impB = 1.0 / float(oddB_s)
+            impsum = impA + impX + impB
+            pA_disp = impA / impsum
+            pX_disp = impX / impsum
+            pB_disp = impB / impsum
+        except Exception:
+            pA_disp, pX_disp, pB_disp = pA_win, pDraw, pB_win
+    else:
+        # Use the SAME labels + probs as the betting markets engine
+        labA = mx["1"]["label"]
+        labX = mx["X"]["label"]
+        labB = mx["2"]["label"]
+
+        pA_disp = float(mx["1"]["p"])
+        pX_disp = float(mx["X"]["p"])
+        pB_disp = float(mx["2"]["p"])
 
     header_html = f"""
     <div style="border-radius:16px;padding:14px 16px;margin-top:8px;
@@ -760,7 +1181,70 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
     insights = generate_preview_insights(team_a, team_b, conn)
     conn.close()
 
+    # -----------------------------
+    # 📊 Betting Markets (fun only)
+    # -----------------------------
+    with st.expander("📊 Betting Markets", expanded=False):
+
+        # Helper to render odds tiles in the same style as your 1X2 row
+        def _render_tiles(items):
+            cols = st.columns(len(items))
+            for i, it in enumerate(items):
+                with cols[i]:
+                    pct_html = (
+                        f"<div class='pct'>{it['pct']}</div>"
+                        if "pct" in it and it["pct"] not in (None, "")
+                        else ""
+                    )
+
+                    st.markdown(
+                        f"""
+                        <div class="odd">
+                            <div class="lbl">{it['label']}</div>
+                            <div class="val">{it['price']}</div>
+                            {pct_html}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+        # Winning Margin
+        with st.expander("Winning Margin", expanded=False):
+            wm = markets["winning_margin"]["prices"]
+            order = ["A 1–2", "A 3+", "Draw", "B 1–2", "B 3+"]
+            items = []
+            for k in order:
+                d = wm[k]
+                items.append(
+                    {
+                        "label": k,
+                        "price": d["label"],
+                        "pct": f"{float(d['p']) * 100:.1f}%",
+                    }
+                )
+            _render_tiles(items)
+
+        # Total Goals O/U
+        with st.expander("Total Goals", expanded=False):
+            main_ln = float(markets["total_goals"].get("main_line", 0.0) or 0.0)
+
+            for ln, prices in markets["total_goals"]["lines"].items():
+                # A clean row title like bet365
+                tag = " (Main)" if abs(float(ln) - main_ln) < 1e-9 else ""
+                st.markdown(f"<div class='bm-rowtitle'>Total {ln}{tag}</div>", unsafe_allow_html=True)
+
+                keys = [f"Over {ln}", f"Under {ln}"]
+                items = []
+                for k in keys:
+                    d = prices[k]
+                    items.append({"label": k, "price": d["label"]})
+
+                _render_tiles(items)
+                st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+
     with st.expander("🔮 Match Insights", expanded=False):
+
         st.subheader("🔥 Key Matchups")
         km = insights.get("key_matchups")
         if km is not None:
@@ -799,6 +1283,11 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
         else:
             st.info("Form & streaks not available.")
 # Player cards (results-only: MMR/win%/streak/form boxes + best teammate/rival)
+        st.markdown("<h3 style='text-align:center; margin-bottom: 6px;'>Past Matchups</h3>", unsafe_allow_html=True)
+        _render_previous_meetings_block(team_a, team_b, matches_eng, players_df) # type: ignore
+
+
+
 
     with st.expander("🌟 Matchday Player Cards", expanded=False):
         rivals = _weekly_rivals_by_similarity(team_a, team_b, finisher_score, creator_score, impact_index)
