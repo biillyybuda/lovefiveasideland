@@ -9,9 +9,9 @@ Fully compatible with original app logic and database.
 
 import math
 import pandas as pd
-import sqlite3
 import streamlit as st
 from utils.db_utils import K_DEFAULT, DRAW_VALUE, STARTING_MMR, get_conn
+from psycopg2.extras import RealDictCursor
 
 def get_mmr(player_name: str, conn=None):
     """
@@ -20,7 +20,7 @@ def get_mmr(player_name: str, conn=None):
     """
     if conn is None:
         conn = get_conn()
-    df = pd.read_sql("SELECT mmr FROM players WHERE name=?", conn, params=(player_name,))
+    df = pd.read_sql("SELECT mmr FROM players WHERE name=%s", conn, params=(player_name,))
     if df.empty:
         return 1000.0
     return float(df["mmr"].iloc[0])
@@ -102,8 +102,7 @@ def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
     st.write("🔁 Processing all unprocessed matches from clean slate...")
 
     conn = get_conn()
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute('SELECT * FROM matches WHERE processed=0 ORDER BY date ASC')
     rows = cur.fetchall()
     if not rows:
@@ -131,12 +130,13 @@ def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
         return {_norm(k): k for k in name_to_row.keys()}
 
     def _ensure_player_exists(canonical_name: str):
-        cur.execute("SELECT 1 FROM players WHERE name=?", (canonical_name,))
-        if cur.fetchone() is None:
+        cur.execute("SELECT 1 FROM players WHERE name=%s", (canonical_name,))
+        exists = cur.fetchone()
+        if not exists:
             cur.execute(
                 """
                 INSERT INTO players (name, mmr, matches_played, wins, losses, draws, win_streak, lose_streak, last_match_date)
-                VALUES (?, ?, 0, 0, 0, 0, 0, 0, NULL)
+                VALUES (%s, %s, 0, 0, 0, 0, 0, 0, NULL)
                 """,
                 (canonical_name, float(STARTING_MMR)),
             )
@@ -144,9 +144,18 @@ def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
 
     processed_count = 0
     for row in rows:
-        mid, mdate, team_a, team_b, score, result, team_a_avg, team_b_avg, processed, *_ = row
+        mid = row["id"]
+        mid = int(mid)
+        mdate = row.get("date")
+        team_a = row.get("team_a")
+        team_b = row.get("team_b")
+        score = row.get("score")
+        result = row.get("result")
+        team_a_avg = row.get("team_a_avg")
+        team_b_avg = row.get("team_b_avg")
+        processed = row.get("processed")
         # 🧹 Remove any existing MMR history for this match before recalculating
-        cur.execute("DELETE FROM mmr_history WHERE match_id=?", (mid,))
+        cur.execute("DELETE FROM mmr_history WHERE match_id=%s", (mid,))
         conn.commit()
 
         # 🧩 Ensure team scores are available for goal difference checks
@@ -199,7 +208,7 @@ def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
 
         # OPTIONAL BUT STRONGLY RECOMMENDED: rewrite canonical names into matches table
         cur.execute(
-            "UPDATE matches SET team_a=?, team_b=? WHERE id=?",
+            "UPDATE matches SET team_a=%s, team_b=%s WHERE id=%s",
             (", ".join(ta), ", ".join(tb), mid),
         )
         conn.commit()
@@ -242,7 +251,7 @@ def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
             )
 
             cur.execute(
-                'UPDATE players SET mmr=? WHERE name=?',
+                'UPDATE players SET mmr=%s WHERE name=%s',
                 (after, n)
             )
             histories.append((n, before, after))
@@ -270,7 +279,7 @@ def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
             )
 
             cur.execute(
-                'UPDATE players SET mmr=? WHERE name=?',
+                'UPDATE players SET mmr=%s WHERE name=%s',
                 (after, n)
             )
             histories.append((n, before, after))
@@ -280,7 +289,7 @@ def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
 
         # --- Update player stats
         for n in set(ta + tb):
-            cur.execute('SELECT * FROM players WHERE name=?', (n,))
+            cur.execute('SELECT * FROM players WHERE name=%s', (n,))
             r = cur.fetchone()
             if not r:
                 continue
@@ -306,30 +315,30 @@ def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
                 d += 1; ws = 0; ls = 0
 
             cur.execute(
-                'UPDATE players SET matches_played=?, wins=?, losses=?, draws=?, win_streak=?, lose_streak=?, last_match_date=? WHERE name=?',
+                'UPDATE players SET matches_played=%s, wins=%s, losses=%s, draws=%s, win_streak=%s, lose_streak=%s, last_match_date=%s WHERE name=%s',
                 (mp, w, l, d, ws, ls, mdate, n)
             )
 
         # --- Record match MMR history (prevent duplicates)
         for n, before, after in histories:
-            cur.execute('SELECT id FROM players WHERE name=?', (n,))
+            cur.execute('SELECT id FROM players WHERE name=%s', (n,))
             prow = cur.fetchone()
-            pid = int(prow[0]) if prow else None
+            pid = int(prow["id"]) if prow and prow.get("id") is not None else None
 
             # remove any existing duplicate entries first
             cur.execute(
-                "DELETE FROM mmr_history WHERE player_id=? AND match_id=?",
+                "DELETE FROM mmr_history WHERE player_id=%s AND match_id=%s",
                 (pid, mid)
             )
 
             # insert fresh history record
             cur.execute(
-                'INSERT INTO mmr_history (player_id, match_id, date, mmr_before, mmr_after) VALUES (?,?,?,?,?)',
+                'INSERT INTO mmr_history (player_id, match_id, date, mmr_before, mmr_after) VALUES (%s,%s,%s,%s,%s)',
                 (pid, mid, mdate, before, after)
             )
 
         # --- Mark match as processed
-        cur.execute('UPDATE matches SET processed=1, team_a_avg=?, team_b_avg=? WHERE id=?',
+        cur.execute('UPDATE matches SET processed=1, team_a_avg=%s, team_b_avg=%s WHERE id=%s',
                     (a_avg, b_avg, mid))
         conn.commit()
         processed_count += 1

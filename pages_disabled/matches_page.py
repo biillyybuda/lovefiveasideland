@@ -96,11 +96,21 @@ def render_matches_page():
             conn = get_conn()
             cur = conn.cursor()
             cur.execute(
-                'INSERT INTO matches (date, team_a, team_b, score, result, processed) VALUES (?,?,?,?,?,0)',
-                (m_date.isoformat(), ', '.join(team_a_sel), ', '.join(team_b_sel), score_in, result_in)
+                """
+                INSERT INTO matches (date, team_a, team_b, score, result, processed)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (m_date.isoformat(), ", ".join(team_a_sel), ", ".join(team_b_sel), score_in, result_in, 0)
             )
             conn.commit()
             conn.close()
+
+            # 🔥 clear cached matches so UI refreshes
+            try:
+                load_matches_df.clear()
+            except Exception:
+                st.cache_data.clear()
+
             st.success('Match added (draft).')
             st.rerun()
 
@@ -111,7 +121,10 @@ def render_matches_page():
         if sel_id:
             conn = get_conn()
             cur = conn.cursor()
-            cur.execute('SELECT id, date, team_a, team_b, score, result, processed FROM matches WHERE id=?', (int(sel_id),))
+            cur.execute(
+                "SELECT id, date, team_a, team_b, score, result, processed FROM matches WHERE id=%s",
+                (int(sel_id),)
+            )
             row = cur.fetchone()
             conn.close()
             if row:
@@ -172,7 +185,11 @@ def render_matches_page():
                         conn = get_conn()
                         cur = conn.cursor()
                         cur.execute(
-                            'UPDATE matches SET date=?, team_a=?, team_b=?, score=?, result=?, processed=? WHERE id=?',
+                            """
+                            UPDATE matches
+                            SET date=%s, team_a=%s, team_b=%s, score=%s, result=%s, processed=%s
+                            WHERE id=%s
+                            """,
                             (
                                 ed_date_in.isoformat(),
                                 team_a_db,
@@ -185,14 +202,26 @@ def render_matches_page():
                         )
                         conn.commit()
                         conn.close()
+
+                        try:
+                            load_matches_df.clear()
+                        except Exception:
+                            st.cache_data.clear()
+
                         st.success('Match updated')
                         st.rerun()
                 if delete_it:
                     conn = get_conn()
                     cur = conn.cursor()
-                    cur.execute('DELETE FROM matches WHERE id=?', (int(edit_id),))
+                    cur.execute("DELETE FROM matches WHERE id=%s", (int(edit_id),))
                     conn.commit()
                     conn.close()
+
+                    try:
+                        load_matches_df.clear()
+                    except Exception:
+                        st.cache_data.clear()
+
                     st.success('Match deleted')
                     st.rerun()
             else:
@@ -219,6 +248,13 @@ def render_matches_page():
         if st.button("Process Unprocessed Matches"):
             try:
                 cnt = process_unprocessed_matches()
+
+                # 🔥 clear cached matches so UI refreshes
+                try:
+                    load_matches_df.clear()
+                except Exception:
+                    st.cache_data.clear()
+
                 if cnt > 0:
                     st.success(f"Processed {cnt} match(es).")
                 else:
@@ -232,8 +268,16 @@ def render_matches_page():
             try:
                 backup_db_manual()
                 cnt = reset_and_reprocess_season()
+
+                # 🔥 clear cached matches so UI refreshes
+                try:
+                    load_matches_df.clear()
+                except Exception:
+                    st.cache_data.clear()
+
                 st.success(f"Full rebuild complete. Processed {cnt} match(es) from 1000.")
                 st.rerun()
+
             except Exception as e:
                 st.error(f"Error while rebuilding season: {e}")
 
