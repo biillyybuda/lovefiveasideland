@@ -9,3 +9,4 @@ Pillow
 psycopg2-binary==2.9.11
 supabase
 streamlit-cookies-controller
+scipy
