@@ -97,21 +97,23 @@ def _restore_session_from_cookie() -> bool:
 
     controller = _get_cookie_controller()
 
-    # First run after a hard refresh can return None while the component syncs.
-    # If we haven't tried yet, do one quick rerun.
-    if "_lf_cookie_checked" not in st.session_state:
-        st.session_state["_lf_cookie_checked"] = True
-        # Touch component once, then rerun to let it populate.
-        controller.getAll()
-        st.rerun()
-
+    # Force the cookie component to render (no rerun loop).
+    # On some hosts the first get() can be None; try twice within same run.
     token = controller.get(COOKIE_KEY)
+    if not token:
+        # Touch the component once to sync and try again
+        try:
+            controller.getAll()
+        except Exception:
+            pass
+        token = controller.get(COOKIE_KEY)
+
     if not token:
         return False
 
     payload = _unpack(str(token))
     if not payload:
-        # Tampered/invalid cookie -> clear it
+        # Invalid cookie -> clear and force login
         try:
             controller.remove(COOKIE_KEY)
         except Exception:
@@ -125,8 +127,6 @@ def _restore_session_from_cookie() -> bool:
     sb = get_supabase()
 
     try:
-        # Refresh session from refresh token
-        # Supabase docs: auth.refresh_session(refresh_token=...)
         res = sb.auth.refresh_session(refresh_token=str(refresh_token))
 
         sess = {
@@ -137,7 +137,7 @@ def _restore_session_from_cookie() -> bool:
         }
         st.session_state["sb_session"] = sess
 
-        # Refresh tokens can rotate; persist the new one.
+        # Persist rotated refresh token
         controller.set(
             COOKIE_KEY,
             _pack({"refresh_token": sess["refresh_token"], "email": sess.get("email")}),
@@ -146,7 +146,6 @@ def _restore_session_from_cookie() -> bool:
         return True
 
     except Exception:
-        # If refresh fails, clear cookie and require login
         try:
             controller.remove(COOKIE_KEY)
         except Exception:
