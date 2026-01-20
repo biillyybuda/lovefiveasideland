@@ -43,6 +43,19 @@ def _get_cookie_controller() -> CookieController:
         st.session_state["_lf_cookie_controller"] = CookieController(key="lovefive_cookies")
     return st.session_state["_lf_cookie_controller"]
 
+def _cookie_set(controller: CookieController, key: str, value: str) -> None:
+    """
+    CookieController versions differ on supported kwargs.
+    Prefer max_age; if unsupported, fall back to plain set (session cookie).
+    """
+    try:
+        controller.set(key, value, max_age=COOKIE_MAX_AGE)
+    except TypeError:
+        controller.set(key, value)
+    except Exception:
+        controller.set(key, value)
+
+
 
 # -----------------------------
 # Signed (tamper-evident) payload helpers
@@ -96,6 +109,8 @@ def _restore_session_from_cookie() -> bool:
         return True
 
     controller = _get_cookie_controller()
+    controller.getAll()
+
 
     # Force the cookie component to render (no rerun loop).
     # On some hosts the first get() can be None; try twice within same run.
@@ -138,10 +153,10 @@ def _restore_session_from_cookie() -> bool:
         st.session_state["sb_session"] = sess
 
         # Persist rotated refresh token
-        controller.set(
+        _cookie_set(
+            controller,
             COOKIE_KEY,
             _pack({"refresh_token": sess["refresh_token"], "email": sess.get("email")}),
-            max_age=COOKIE_MAX_AGE,
         )
         return True
 
@@ -175,6 +190,7 @@ def sb_client_authed():
 def login_ui():
     sb = get_supabase()
     controller = _get_cookie_controller()
+    controller.getAll()
 
     # Web-style mode toggle
     if "auth_mode" not in st.session_state:
@@ -251,10 +267,10 @@ def login_ui():
         st.session_state["sb_session"] = sess
 
         # Persist refresh_token only (access tokens expire)
-        controller.set(
+        _cookie_set(
+            controller,
             COOKIE_KEY,
             _pack({"refresh_token": sess["refresh_token"], "email": sess.get("email")}),
-            max_age=COOKIE_MAX_AGE,
         )
 
         st.success("Logged in.")
