@@ -3,6 +3,7 @@ from pathlib import Path
 from datetime import datetime
 import pandas as pd
 import psycopg2
+from psycopg2.pool import SimpleConnectionPool
 import streamlit as st
 
 # -----------------------------
@@ -63,32 +64,84 @@ def get_conn():
         sslmode="require",
     )
 
+
+# -----------------------------
+# Connection pool (faster on cloud)
+# -----------------------------
+@st.cache_resource
+def _get_pool():
+    """Create a small Postgres connection pool per Streamlit process."""
+    db_url = os.getenv("DATABASE_URL")
+    if db_url:
+        return SimpleConnectionPool(1, 5, dsn=db_url, sslmode="require")
+
+    host = os.getenv("PGHOST", "").strip()
+    password = os.getenv("PGPASSWORD", "")
+    if not host or not password:
+        raise RuntimeError(
+            "Postgres env vars not set. Set DATABASE_URL (recommended) "
+            "or PGHOST/PGDATABASE/PGUSER/PGPASSWORD/PGPORT."
+        )
+
+    return SimpleConnectionPool(
+        1,
+        5,
+        host=host,
+        dbname=os.getenv("PGDATABASE", "postgres"),
+        user=os.getenv("PGUSER", "postgres"),
+        password=password,
+        port=int(os.getenv("PGPORT", "5432")),
+        sslmode="require",
+    )
+
+
+from contextlib import contextmanager
+
+@contextmanager
+def pooled_conn():
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        yield conn
+    finally:
+        pool.putconn(conn)
+
+# -----------------------------
+# Generic cached query helper
+# -----------------------------
+@st.cache_data(ttl=300, show_spinner=False)
+def query_df_cached(query: str, params: tuple = ()):
+    with pooled_conn() as conn:
+        return pd.read_sql(query, conn, params=params)
+
+
 # -----------------------------
 # Data loaders (used widely)
 # -----------------------------
 @st.cache_data(ttl=300)
 def load_players_df():
     league_id = get_current_league_id()
-    conn = get_conn()
-    df = pd.read_sql(
-        'SELECT * FROM public.players WHERE league_id = %s ORDER BY name',
-        conn,
-        params=(league_id,),
-    )
-    conn.close()
+    with pooled_conn() as conn:
+        df = pd.read_sql(
+            'SELECT * FROM public.players WHERE league_id = %s ORDER BY name',
+            conn,
+            params=(league_id,),
+        )
     return df
-
 @st.cache_data(ttl=300)
 def load_matches_df():
     league_id = get_current_league_id()
-    conn = get_conn()
-    df = pd.read_sql(
-        'SELECT * FROM public.matches WHERE league_id = %s ORDER BY date',
-        conn,
-        params=(league_id,),
-    )
-    conn.close()
+    with pooled_conn() as conn:
+        df = pd.read_sql(
+            'SELECT * FROM public.matches WHERE league_id = %s ORDER BY date',
+            conn,
+            params=(league_id,),
+        )
     return df
+
+@st.cache_data(ttl=300, show_spinner=False)
+def sql_df(query: str, params: tuple = ()):
+    return query_df_cached(query, params)
 
 # -----------------------------
 # Backups (Supabase handles backups)

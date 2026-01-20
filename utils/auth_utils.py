@@ -1,9 +1,29 @@
 # utils/auth_utils.py
+# Persistent Supabase login for Streamlit using client-side cookies.
+# Uses streamlit-cookies-controller (more reliable on cloud than streamlit-cookies-manager).
+# Ref: https://discuss.streamlit.io/t/new-component-streamlit-cookies-controller/64251
+
 import os
+import json
+import base64
+import hmac
+import hashlib
+from typing import Optional, Dict, Any
+
 import streamlit as st
 from supabase import create_client
 
+from streamlit_cookies_controller import CookieController, RemoveEmptyElementContainer
 
+
+COOKIE_KEY = "lovefive_sb_session"
+COOKIE_MAX_AGE = 30 * 24 * 60 * 60  # 30 days
+
+
+# -----------------------------
+# Supabase client
+# -----------------------------
+@st.cache_resource
 def get_supabase():
     url = os.getenv("SUPABASE_URL", "").strip()
     key = os.getenv("SUPABASE_ANON_KEY", "").strip()
@@ -12,17 +32,140 @@ def get_supabase():
     return create_client(url, key)
 
 
+# -----------------------------
+# Cookie controller (per-session)
+# -----------------------------
+def _get_cookie_controller() -> CookieController:
+    # Components should not be created in st.cache_*, keep it in session_state.
+    if "_lf_cookie_controller" not in st.session_state:
+        # Prevent empty iframe flicker (recommended by the component author)
+        RemoveEmptyElementContainer()
+        st.session_state["_lf_cookie_controller"] = CookieController(key="lovefive_cookies")
+    return st.session_state["_lf_cookie_controller"]
+
+
+# -----------------------------
+# Signed (tamper-evident) payload helpers
+# -----------------------------
+def _cookie_secret() -> bytes:
+    return (os.getenv("COOKIE_SECRET") or "dev-secret-change-me").encode("utf-8")
+
+
+def _b64url_encode(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).decode("utf-8").rstrip("=")
+
+
+def _b64url_decode(s: str) -> bytes:
+    pad = "=" * (-len(s) % 4)
+    return base64.urlsafe_b64decode((s + pad).encode("utf-8"))
+
+
+def _sign(data: bytes) -> str:
+    sig = hmac.new(_cookie_secret(), data, hashlib.sha256).digest()
+    return _b64url_encode(sig)
+
+
+def _pack(payload: Dict[str, Any]) -> str:
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    body = _b64url_encode(raw)
+    sig = _sign(raw)
+    return f"{body}.{sig}"
+
+
+def _unpack(token: str) -> Optional[Dict[str, Any]]:
+    try:
+        body, sig = token.split(".", 1)
+        raw = _b64url_decode(body)
+        expected = _sign(raw)
+        if not hmac.compare_digest(sig, expected):
+            return None
+        obj = json.loads(raw.decode("utf-8"))
+        if not isinstance(obj, dict):
+            return None
+        return obj
+    except Exception:
+        return None
+
+
+# -----------------------------
+# Session restore
+# -----------------------------
+def _restore_session_from_cookie() -> bool:
+    """If session_state has no sb_session, try to restore from cookie."""
+    if st.session_state.get("sb_session"):
+        return True
+
+    controller = _get_cookie_controller()
+
+    # First run after a hard refresh can return None while the component syncs.
+    # If we haven't tried yet, do one quick rerun.
+    if "_lf_cookie_checked" not in st.session_state:
+        st.session_state["_lf_cookie_checked"] = True
+        # Touch component once, then rerun to let it populate.
+        controller.getAll()
+        st.rerun()
+
+    token = controller.get(COOKIE_KEY)
+    if not token:
+        return False
+
+    payload = _unpack(str(token))
+    if not payload:
+        # Tampered/invalid cookie -> clear it
+        try:
+            controller.remove(COOKIE_KEY)
+        except Exception:
+            pass
+        return False
+
+    refresh_token = payload.get("refresh_token")
+    if not refresh_token:
+        return False
+
+    sb = get_supabase()
+
+    try:
+        # Refresh session from refresh token
+        # Supabase docs: auth.refresh_session(refresh_token=...)
+        res = sb.auth.refresh_session(refresh_token=str(refresh_token))
+
+        sess = {
+            "access_token": res.session.access_token,  # type: ignore
+            "refresh_token": res.session.refresh_token,  # type: ignore
+            "user_id": res.user.id,  # type: ignore
+            "email": res.user.email,  # type: ignore
+        }
+        st.session_state["sb_session"] = sess
+
+        # Refresh tokens can rotate; persist the new one.
+        controller.set(
+            COOKIE_KEY,
+            _pack({"refresh_token": sess["refresh_token"], "email": sess.get("email")}),
+            max_age=COOKIE_MAX_AGE,
+        )
+        return True
+
+    except Exception:
+        # If refresh fails, clear cookie and require login
+        try:
+            controller.remove(COOKIE_KEY)
+        except Exception:
+            pass
+        return False
+
+
+# -----------------------------
+# Public helpers used by app.py
+# -----------------------------
 def is_authed() -> bool:
-    # Keep your existing contract: authed if sb_session dict exists
-    return bool(st.session_state.get("sb_session"))
+    return _restore_session_from_cookie()
 
 
 def sb_client_authed():
-    """
-    Supabase client with PostgREST auth header set for the logged-in user.
-    Useful for league_members / league_invites tables (and later RLS).
-    """
+    """Supabase client with PostgREST auth header set for the logged-in user."""
     sb = get_supabase()
+    _restore_session_from_cookie()
+
     sess = st.session_state.get("sb_session") or {}
     token = sess.get("access_token")
     if token:
@@ -32,6 +175,7 @@ def sb_client_authed():
 
 def login_ui():
     sb = get_supabase()
+    controller = _get_cookie_controller()
 
     # Web-style mode toggle
     if "auth_mode" not in st.session_state:
@@ -67,7 +211,6 @@ def login_ui():
     if not submitted:
         return
 
-    # Validate only on submit (stops the “random backend error” UX)
     email_clean = (email or "").strip()
     if not email_clean:
         st.error("Please enter your email.")
@@ -90,7 +233,6 @@ def login_ui():
         try:
             sb.auth.sign_up({"email": email_clean, "password": password})
             st.success("Account created.")
-            # Optional: flip back to login mode after signup
             st.session_state["auth_mode"] = "login"
         except Exception as e:
             st.error(f"Sign-up failed: {e}")
@@ -100,27 +242,43 @@ def login_ui():
     try:
         res = sb.auth.sign_in_with_password({"email": email_clean, "password": password})
 
-        # Keep your exact session dict format used elsewhere
-        st.session_state.sb_session = {
+        sess = {
             "access_token": res.session.access_token,  # type: ignore
             "refresh_token": res.session.refresh_token,  # type: ignore
             "user_id": res.user.id,  # type: ignore
             "email": res.user.email,  # type: ignore
         }
 
+        st.session_state["sb_session"] = sess
+
+        # Persist refresh_token only (access tokens expire)
+        controller.set(
+            COOKIE_KEY,
+            _pack({"refresh_token": sess["refresh_token"], "email": sess.get("email")}),
+            max_age=COOKIE_MAX_AGE,
+        )
+
         st.success("Logged in.")
         st.rerun()
+
     except Exception as e:
         st.error(f"Login failed: {e}")
 
 
 def logout_ui():
+    controller = _get_cookie_controller()
+
     if st.sidebar.button("Logout", use_container_width=True, key="logout_btn"):
         st.session_state.pop("sb_session", None)
         st.session_state.pop("league_id", None)
         st.session_state.pop("league_name", None)
         st.session_state.pop("league_role", None)
 
-        # Keep your current behaviour
+        # Clear cookie
+        try:
+            controller.remove(COOKIE_KEY)
+        except Exception:
+            pass
+
         st.cache_data.clear()
         st.rerun()

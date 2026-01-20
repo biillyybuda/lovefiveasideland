@@ -116,7 +116,11 @@ st.sidebar.markdown("---")
 # -----------------------------
 from utils.player_link_utils import ensure_player_linked_ui
 
-ensure_player_linked_ui()
+role = (st.session_state.get("league_role") or "").lower()
+
+# Only force player linking for non-admins
+if role not in ("admin", "owner"):
+    ensure_player_linked_ui()
 
 
 

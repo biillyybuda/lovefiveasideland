@@ -5,7 +5,7 @@ from collections import defaultdict
 from utils.mmr_utils import get_season_mmr, get_current_season_start
 
 
-from utils.db_utils import get_conn
+from utils.db_utils import get_conn, get_current_league_id, sql_df
 from utils.export_utils import df_to_png, fig_to_png_bytes  # kept for compatibility (may be used elsewhere)
 from utils.stats_shared import (
     get_chemistry_df,
@@ -22,26 +22,6 @@ from utils.ui_components import page_header
 # ----------------------------
 def _split_team(val: str):
     return [p.strip() for p in str(val or "").split(",") if str(p).strip()]
-
-
-def get_name_map(conn) -> dict:
-    """
-    Map DB key -> UI display name.
-    DB key = players.name
-    UI name = players.display_name
-    """
-    df = pd.read_sql("SELECT name, display_name FROM players", conn)
-    df["name"] = df["name"].fillna("").astype(str)
-    df["display_name"] = df["display_name"].fillna("").astype(str)
-
-    name_map = {}
-    for _, r in df.iterrows():
-        key = r["name"].strip()
-        ui = r["display_name"].strip()
-        if not ui:
-            ui = _fallback_display_name(key)
-        name_map[key] = ui
-    return name_map
 
 
 def to_display(key: str, name_map: dict) -> str:
@@ -86,6 +66,134 @@ def get_season_filter_ui(matches_df: pd.DataFrame, suffix=""):
 
     return season_mode, selected_year, season_start, df_filt
 
+@st.cache_data(ttl=300, show_spinner=False)
+def get_name_map_cached(league_id: int) -> dict:
+    df = sql_df(
+        "SELECT name, display_name FROM public.players WHERE league_id=%s",
+        (league_id,),
+    )
+    df["name"] = df["name"].fillna("").astype(str)
+    df["display_name"] = df["display_name"].fillna("").astype(str)
+
+    name_map = {}
+    for _, r in df.iterrows():
+        key = r["name"].strip()
+        ui = r["display_name"].strip() or _fallback_display_name(key)
+        name_map[key] = ui
+    return name_map
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_mmr_history_cached(league_id: int) -> pd.DataFrame:
+    return sql_df(
+        """
+        SELECT
+            m.id AS match_id,
+            m.date AS match_date,
+            mh.player_id,
+            p.name AS player_key,
+            p.display_name AS player_display,
+            mh.mmr_before,
+            mh.mmr_after
+        FROM public.mmr_history mh
+        JOIN public.matches m ON mh.match_id = m.id
+        JOIN public.players p ON mh.player_id = p.id
+        WHERE m.processed = 1 AND m.league_id = %s
+        ORDER BY m.date ASC, mh.id ASC
+        """,
+        (league_id,),
+    )
+
+@st.cache_data(ttl=300, show_spinner=False)
+def season_baseline_map(df_json: str) -> dict[int, float]:
+    df = pd.read_json(df_json)
+
+    df["player_id"] = pd.to_numeric(df["player_id"], errors="coerce").fillna(0).astype(int)
+
+    firsts = (
+        df.sort_values(["player_id", "date_dt"])
+          .groupby("player_id", as_index=True)
+          .first()
+    )
+
+    mmr_before_s = pd.to_numeric(firsts["mmr_before"], errors="coerce").fillna(0.0).astype(float)
+    return {int(pid): float(mmr_before_s.loc[pid]) for pid in mmr_before_s.index}
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_mmr_history_full_cached(league_id: int) -> pd.DataFrame:
+    return sql_df(
+        """
+        SELECT
+            mh.*,
+            p.name
+        FROM public.mmr_history mh
+        JOIN public.players p ON mh.player_id = p.id
+        JOIN public.matches m ON mh.match_id = m.id
+        WHERE m.league_id = %s
+        ORDER BY mh.date ASC
+        """,
+        (league_id,),
+    )
+
+@st.cache_data(ttl=300, show_spinner=False)
+def compute_global_win_att(matches_json: str, min_games: int):
+    matches = pd.read_json(matches_json)
+
+    games_played = defaultdict(int)
+    wins = defaultdict(int)
+    appearances = defaultdict(int)
+
+    for _, m in matches.iterrows():
+        ta = _split_team(m.get("team_a", ""))
+        tb = _split_team(m.get("team_b", ""))
+        res = (m.get("result") or "").upper()
+
+        allp = set(ta + tb)
+        for p in allp:
+            if p:
+                games_played[p] += 1
+
+        for p in ta:
+            if p:
+                appearances[p] += 1
+        for p in tb:
+            if p:
+                appearances[p] += 1
+
+        if res == "A":
+            for p in ta:
+                if p:
+                    wins[p] += 1
+        elif res == "B":
+            for p in tb:
+                if p:
+                    wins[p] += 1
+
+    eligible = sorted([p for p, gp in games_played.items() if int(gp) >= int(min_games)])
+
+    # IMPORTANT: always return DataFrames with consistent columns
+    win_rows = []
+    for p in eligible:
+        gp = int(games_played.get(p, 0))
+        w = int(wins.get(p, 0))
+        wp = round((w / gp * 100), 1) if gp else 0.0
+        win_rows.append({"Player": p, "Win %": wp})
+
+    att_rows = []
+    total_matches = len(matches)
+    for p in eligible:
+        ap = int(appearances.get(p, 0))
+        attp = round((ap / total_matches * 100), 1) if total_matches else 0.0
+        att_rows.append({"Player": p, "Attendance %": attp})
+
+    df_win = pd.DataFrame(win_rows, columns=["Player", "Win %"])
+    df_att = pd.DataFrame(att_rows, columns=["Player", "Attendance %"])
+
+    return eligible, df_win, df_att
+
+
+
+
+
 
 
 # ----------------------------
@@ -94,89 +202,71 @@ def get_season_filter_ui(matches_df: pd.DataFrame, suffix=""):
 def render_mmr_progression_over_time(suffix="", season_mode=None, selected_year=None, season_start=None, matches=None):
     st.subheader("📈 MMR Progression Over Time")
 
-    conn = get_conn()
-    try:
-        # Pull full MMR history (processed matches only)
-        df_mmr = pd.read_sql(
-            """
-            SELECT
-                m.id AS match_id,
-                m.date AS match_date,
-                mh.player_id,
-                p.name AS player_key,
-                p.display_name AS player_display,
-                mh.mmr_after
-            FROM mmr_history mh
-            JOIN matches m ON mh.match_id = m.id
-            JOIN players p ON mh.player_id = p.id
-            WHERE m.processed = 1
-            ORDER BY m.date ASC, mh.id ASC
-            """,
-            conn,
-        )
+    # Pull full MMR history (processed matches only)
+    league_id = get_current_league_id()
+    df_mmr = load_mmr_history_cached(league_id)
 
-        if df_mmr.empty:
-            st.info("No MMR history yet.")
-            return
+    if df_mmr.empty:
+        st.info("No MMR history yet.")
+        return
 
-        # Apply the same season / match filters used by the page
-        if matches is not None and not matches.empty and "id" in matches.columns:
-            allowed_ids = set(matches["id"].astype(int).tolist())
-            df_mmr = df_mmr[df_mmr["match_id"].astype(int).isin(allowed_ids)].copy()
+    # Apply match filter if provided
+    if matches is not None and not matches.empty and "id" in matches.columns:
+        allowed_ids = set(matches["id"].astype(int).tolist())
+        df_mmr = df_mmr[df_mmr["match_id"].astype(int).isin(allowed_ids)].copy()
 
-        df_mmr["date_dt"] = pd.to_datetime(df_mmr["match_date"], errors="coerce")
+    df_mmr["date_dt"] = pd.to_datetime(df_mmr["match_date"], errors="coerce")
+    df_mmr["date_dt"] = df_mmr["date_dt"].dt.normalize()  # type: ignore
 
-        # Remove weird microsecond ticks (normalize to day)
-        df_mmr["date_dt"] = df_mmr["date_dt"].dt.normalize() # type: ignore
+    name_map = get_name_map_cached(get_current_league_id())
+    df_mmr["player_label"] = df_mmr["player_key"].apply(lambda k: to_display(k, name_map))
 
-        name_map = get_name_map(conn)
-        df_mmr["player_label"] = df_mmr["player_key"].apply(lambda k: to_display(k, name_map))
+    # Season-reset display MMR
+    show_season = (season_mode == "Single Year (season reset)" and season_start)
+    if show_season:
+        payload = df_mmr[["player_id", "mmr_before", "date_dt"]].to_json(date_format="iso")
+        base = season_baseline_map(payload)
 
-        # Season-reset display MMR
-        show_season = (season_mode == "Single Year (season reset)" and season_start)
-        if show_season:
-            df_mmr["mmr_plot"] = df_mmr.apply(
-                lambda r: float(get_season_mmr(conn, int(r["player_id"]), season_start, float(r["mmr_after"]))), # type: ignore
-                axis=1,
-            )
-            ycol = "mmr_plot"
-            ylab = "Season MMR"
-        else:
-            df_mmr["mmr_plot"] = df_mmr["mmr_after"].astype(float)
-            ycol = "mmr_plot"
-            ylab = "Rolling MMR"
+        df_mmr["player_id_int"] = pd.to_numeric(df_mmr["player_id"], errors="coerce").fillna(0).astype(int)
+        df_mmr["base_before"] = df_mmr["player_id_int"].map(base).fillna(df_mmr["mmr_before"].astype(float))
 
-        options = sorted(df_mmr["player_label"].dropna().unique().tolist())
+        df_mmr["mmr_plot"] = 1000.0 + (df_mmr["mmr_after"].astype(float) - df_mmr["base_before"])
+        ycol = "mmr_plot"
+        ylab = "Season MMR (reset to 1000)"
+    else:
+        df_mmr["mmr_plot"] = df_mmr["mmr_after"].astype(float)
+        ycol = "mmr_plot"
+        ylab = "Rolling MMR"
 
-        player_choice = st.multiselect(
-            "Select Player(s)",
-            options=options,
-            default=[],
-            key=f"mmr_progress_players_{suffix}",
-        )
+    options = sorted(df_mmr["player_label"].dropna().unique().tolist())
 
-        if not player_choice:
-            st.info("Choose one or more players to plot their MMR progression.")
-            return
+    player_choice = st.multiselect(
+        "Select Player(s)",
+        options=options,
+        default=[],
+        key=f"mmr_progress_players_{suffix}",
+    )
 
-        df_filtered = df_mmr[df_mmr["player_label"].isin(player_choice)].copy()
+    if not player_choice:
+        st.info("Choose one or more players to plot their MMR progression.")
+        return
 
-        fig = px.line(
-            df_filtered,
-            x="date_dt",
-            y=ycol,
-            color="player_label",
-            markers=True,
-            title="MMR Over Time",
-            labels={
-                "date_dt": "Match Date",
-                ycol: ylab,
-                "player_label": "Player",
-            },
-        )
-        st.plotly_chart(fig, use_container_width=True, key=f"mmr_progress_fig_{suffix}")
-    finally:
-        conn.close()
+    df_filtered = df_mmr[df_mmr["player_label"].isin(player_choice)].copy()
+
+    fig = px.line(
+        df_filtered,
+        x="date_dt",
+        y=ycol,
+        color="player_label",
+        markers=True,
+        title="MMR Over Time",
+        labels={
+            "date_dt": "Match Date",
+            ycol: ylab,
+            "player_label": "Player",
+        },
+    )
+    st.plotly_chart(fig, use_container_width=True, key=f"mmr_progress_fig_{suffix}")
 
 # ----------------------------
 # 🌍 GLOBAL OVERVIEW
@@ -186,14 +276,21 @@ def render_global_overview(suffix="", season_mode=None, selected_year=None, seas
 
     conn = get_conn()
     try:
-        matches = matches.copy() if matches is not None else pd.read_sql("SELECT * FROM matches WHERE processed=1 ORDER BY date ASC", conn)
-        players = pd.read_sql("SELECT * FROM players ORDER BY name", conn)
+        matches = matches.copy() if matches is not None else pd.read_sql(
+            "SELECT * FROM public.matches WHERE processed=1 AND league_id=%s ORDER BY date ASC",
+            conn,
+            params=(get_current_league_id(),),
+        )
+        players = sql_df(
+            "SELECT * FROM public.players WHERE league_id=%s ORDER BY name",
+            (get_current_league_id(),),
+        )
 
         if matches.empty:
             st.info("No processed matches yet.")
             return
 
-        name_map = get_name_map(conn)
+        name_map = get_name_map_cached(get_current_league_id())
         plist = players["name"].tolist()
 
         # ----------------------------
@@ -208,40 +305,22 @@ def render_global_overview(suffix="", season_mode=None, selected_year=None, seas
             help="Hide players with too few games in the selected season view.",
             key=f"global_min_games_{suffix}",
         )
-
-        # Count appearances in the filtered matches (season-aware)
-        games_played = defaultdict(int)
-        for _, m in matches.iterrows():
-            for nm in set(_split_team(m.get("team_a", "")) + _split_team(m.get("team_b", ""))):
-                if nm:
-                    games_played[nm] += 1
-
-        # Only keep players meeting the threshold
-        eligible_players = sorted([p for p, gp in games_played.items() if int(gp) >= int(min_games)])
+        payload = matches.to_json(date_format="iso")
+        eligible_players, df_win_raw, df_att_raw = compute_global_win_att(payload, int(min_games))
 
 
         # 🥇 Win % by Player
         st.subheader("🥇 Win % by Player")
 
-        # ✅ Only include players who meet the minimum games threshold
-        plist = eligible_players
+        df_win = df_win_raw.copy()
+        df_win["Name"] = df_win["Player"].apply(lambda k: to_display(k, name_map))
+        df_win = df_win[["Name", "Win %"]]
 
-        win_rows = []
-        for nm in plist:
-            total = 0
-            wins = 0
-            for _, m in matches.iterrows():
-                ta = _split_team(m.get("team_a", ""))
-                tb = _split_team(m.get("team_b", ""))
-                res = (m.get("result") or "").upper()
-                if nm in ta or nm in tb:
-                    total += 1
-                    if (nm in ta and res == "A") or (nm in tb and res == "B"):
-                        wins += 1
-            wp = round((wins / total * 100), 1) if total > 0 else 0.0
-            win_rows.append({"Name": to_display(nm, name_map), "Win %": wp})
-
-        df_win = pd.DataFrame(win_rows).sort_values("Win %", ascending=False)
+        if df_win.empty:
+            st.info("No eligible players for Win % (try lowering the minimum games filter).")
+            df_win = pd.DataFrame(columns=["Name", "Win %"])
+        else:
+            df_win = df_win.sort_values("Win %", ascending=False)
         fig_win = px.bar(df_win, x="Name", y="Win %", title="Win % by Player", text="Win %")
         fig_win.update_traces(textposition="outside")
         fig_win.update_yaxes(range=[0, df_win["Win %"].max() * 1.15 if not df_win.empty else 100])
@@ -251,20 +330,13 @@ def render_global_overview(suffix="", season_mode=None, selected_year=None, seas
         # 📅 Attendance (%)
         st.subheader("📅 Attendance (All Players)")
         total_matches = len(matches)
-        att = defaultdict(int)
-        for _, m in matches.iterrows():
-            allp = _split_team(m.get("team_a", "")) + _split_team(m.get("team_b", ""))
-            for nm in allp:
-                att[nm] += 1
-
-        df_att = pd.DataFrame(
-            [{"Player": k, "Attendance %": round((v / total_matches) * 100, 1)} for k, v in att.items()]
-        ).sort_values("Attendance %", ascending=False)
-
-        # ✅ Apply minimum games filter
-        df_att = df_att[df_att["Player"].isin(eligible_players)].copy()
-
+        df_att = df_att_raw.copy()
         df_att["Player"] = df_att["Player"].apply(lambda k: to_display(k, name_map))
+
+        if df_att.empty:
+            st.info("No eligible players for Attendance (try lowering the minimum games filter).")
+        else:
+            df_att = df_att.sort_values("Attendance %", ascending=False)
 
         fig_att = px.bar(df_att, x="Player", y="Attendance %", title="Attendance % (All Players)", text="Attendance %")
         fig_att.update_traces(textposition="outside")
@@ -369,12 +441,10 @@ def render_player_insights(suffix="", season_mode=None, selected_year=None, seas
 
     conn = get_conn()
     try:
-        players = pd.read_sql("SELECT id, name FROM players ORDER BY name", conn)
-        matches = matches.copy() if matches is not None else pd.read_sql("SELECT * FROM matches WHERE processed=1", conn)
-        mmr_hist = pd.read_sql(
-            "SELECT mh.*, p.name FROM mmr_history mh JOIN players p ON mh.player_id=p.id ORDER BY mh.date ASC",
-            conn,
-        )
+        players = pd.read_sql("SELECT id, name FROM players WHERE league_id = %s ORDER BY name", conn, params=(get_current_league_id(),))
+        matches = matches.copy() if matches is not None else pd.read_sql("SELECT * FROM matches WHERE processed=1 AND league_id = %s", conn, params=(get_current_league_id(),))
+        league_id = get_current_league_id()
+        mmr_hist = load_mmr_history_full_cached(league_id)
 
         mmr_hist["date_dt"] = pd.to_datetime(mmr_hist["date"], errors="coerce")
         if season_mode == "Single Year (season reset)" and selected_year is not None:
@@ -385,7 +455,7 @@ def render_player_insights(suffix="", season_mode=None, selected_year=None, seas
             st.info("No processed matches / players found yet.")
             return
 
-        name_map = get_name_map(conn)
+        name_map = get_name_map_cached(get_current_league_id())
         plist = players["name"].tolist()
 
         sel_player = st.selectbox(
@@ -444,11 +514,14 @@ def render_player_insights(suffix="", season_mode=None, selected_year=None, seas
             pid = int(players[players["name"] == sel_player].iloc[0]["id"])
 
             if use_season_start:
-                start_mmr = get_season_mmr(conn, pid, use_season_start, float(df_p.iloc[0]["mmr_before"]))
-                current_mmr = get_season_mmr(conn, pid, use_season_start, float(df_p.iloc[-1]["mmr_after"]))
+                # Season reset to 1000: baseline is the FIRST mmr_before in the season
+                base_before = float(df_p.iloc[0]["mmr_before"])
+                start_mmr = 1000.0
+                current_mmr = 1000.0 + (float(df_p.iloc[-1]["mmr_after"]) - base_before)
             else:
                 start_mmr = float(df_p.iloc[0]["mmr_before"])
                 current_mmr = float(df_p.iloc[-1]["mmr_after"])
+
             net_mmr_change = current_mmr - start_mmr
 
             df_p["mmr_delta"] = df_p["mmr_after"] - df_p["mmr_before"]
@@ -467,16 +540,15 @@ def render_player_insights(suffix="", season_mode=None, selected_year=None, seas
         c2.metric("Losses/Draws", int(total_matches - win_count))
         c3.metric("Avg MMR Δ / Match", f"{avg_mmr_delta:+.2f}" if not df_p.empty else "—")
 
-        st.caption("📌 This section uses match results + MMR history only (no video-tagged stats).")
-
         # --------------------------
         # 📈 MMR Over Time
         # --------------------------
         st.subheader("📈 MMR Over Time")
         if use_season_start:
-            df_p["mmr_plot"] = df_p["mmr_after"].apply(lambda v: get_season_mmr(conn, pid, use_season_start, float(v)))
+            base_before = float(df_p.iloc[0]["mmr_before"])
+            df_p["mmr_plot"] = 1000.0 + (df_p["mmr_after"].astype(float) - base_before)
             ycol = "mmr_plot"
-            ylab = "Season MMR"
+            ylab = "Season MMR (reset to 1000)"
         else:
             df_p["mmr_plot"] = df_p["mmr_after"].astype(float)
             ycol = "mmr_plot"
@@ -668,15 +740,15 @@ def render_head_to_head_section(season_mode=None, selected_year=None, season_sta
         if matches is not None:
             matches_df = matches.copy()
         else:
-            matches_df = pd.read_sql("SELECT * FROM matches WHERE processed=1", conn)
+            matches_df = pd.read_sql("SELECT * FROM matches WHERE processed=1 AND league_id = %s", conn, params=(get_current_league_id(),))
 
         # Safety: ensure dataframe exists
         if matches_df is None:
             matches_df = pd.DataFrame()
 
         # --- Players / name map ---
-        players = pd.read_sql("SELECT id, name FROM players ORDER BY name", conn)
-        name_map = get_name_map(conn)
+        players = pd.read_sql("SELECT id, name FROM players WHERE league_id = %s ORDER BY name", conn, params=(get_current_league_id(),))
+        name_map = get_name_map_cached(get_current_league_id())
         all_players = sorted(players["name"].dropna().astype(str).tolist())
         select_options = ["— Select —"] + all_players
 
@@ -990,11 +1062,11 @@ def render_charts_page():
         divider=True,
     )
 
-    conn = get_conn()
-    try:
-        matches_all = pd.read_sql("SELECT * FROM matches WHERE processed=1 ORDER BY date ASC", conn)
-    finally:
-        conn.close()
+    league_id = get_current_league_id()
+    matches_all = sql_df(
+        "SELECT * FROM public.matches WHERE processed=1 AND league_id=%s ORDER BY date ASC",
+        (league_id,),
+    )
 
     if matches_all.empty:
         st.info("No processed matches yet.")

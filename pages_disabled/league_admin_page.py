@@ -69,40 +69,47 @@ def render_league_admin_page():
     st.markdown("<hr style='opacity:0.18;'>", unsafe_allow_html=True)
     st.subheader("🔗 Player Links")
 
-    league_id_int = int(st.session_state.get("league_id")) # type: ignore
+    league_id_int = int(st.session_state.get("league_id"))  # type: ignore
 
     players = fetch_players_with_links(league_id_int)
     members = fetch_league_members(league_id_int)
 
+    # -----------------------------
+    # Members list (accounts)
+    # -----------------------------
     # members: (user_id, email, profile_display_name, role, status)
     member_ids = [str(m[0]) for m in members]
     member_labels = []
     for user_id, email, prof_dn, role, status in members:
         dn = (prof_dn or "").strip()
-        label = f"{dn} — {email}" if dn else email
+        label = f"{dn} — {email}" if dn else (email or str(user_id))
         member_labels.append(f"{label}  ({role}/{status})")
 
+    # -----------------------------
+    # Players links table
+    # -----------------------------
     # players: (pid, pname, uid, email, profile_display_name)
     st.caption("Admins can fix mistakes here. Users can only self-link to unlinked players.")
+
     link_rows = []
     for pid, pname, uid, email, prof_dn in players:
-        who = ""
-        if uid:
-            who = (prof_dn or "").strip() or (email or "")
-        link_rows = []
-        for pid, pname, uid, email, prof_dn in players:
-            link_rows.append(
-                {
-                    "Player": pname,
-                    "Account display name": (prof_dn or "").strip(),
-                    "Account email": (email or "").strip(),
-                    "Linked": "✅" if uid else "",
-                }
-            )
+        link_rows.append(
+            {
+                "Player": pname,
+                "Account display name": (prof_dn or "").strip(),
+                "Account email": (email or "").strip(),
+                "Linked": "✅" if uid else "",
+            }
+        )
 
-    st.dataframe(link_rows, use_container_width=True, hide_index=True)
+    if link_rows:
+        st.dataframe(link_rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("No players exist in this league yet. Add players in Player Management.")
 
-    # --- Unlink tool ---
+    # -----------------------------
+    # Unlink tool
+    # -----------------------------
     st.markdown("### Unlink a player")
 
     linked = [(pid, pname, uid, email, prof_dn) for pid, pname, uid, email, prof_dn in players if uid]
@@ -124,8 +131,18 @@ def render_league_admin_page():
             st.success("Unlinked.")
             st.rerun()
 
-    # --- Assign / Reassign tool ---
+    # -----------------------------
+    # Assign / Reassign tool
+    # -----------------------------
     st.markdown("### Assign / Reassign")
+
+    if not players:
+        st.info("No players to assign yet. Go to Player Management and add players first.")
+        return
+
+    if not members:
+        st.info("No league members/accounts found yet. Invite someone (or ensure you are a member).")
+        return
 
     player_labels = []
     player_ids = []
@@ -139,6 +156,11 @@ def render_league_admin_page():
 
     pick_player = st.selectbox("Player", player_labels, key="assign_player")
     pick_user = st.selectbox("Account", member_labels, key="assign_user")
+
+    # Safety (shouldn't trigger now, but keeps it bulletproof)
+    if pick_player is None or pick_user is None:
+        st.warning("Select both a player and an account.")
+        return
 
     assign_pid = int(player_ids[player_labels.index(pick_player)])
     assign_uid = str(member_ids[member_labels.index(pick_user)])
