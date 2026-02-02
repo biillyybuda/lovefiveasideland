@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import textwrap
 from collections import defaultdict
 from utils.mmr_utils import get_season_mmr, get_current_season_start
 
@@ -29,6 +30,413 @@ def to_display(key: str, name_map: dict) -> str:
         return ""
     k = str(key).strip()
     return name_map.get(k, _fallback_display_name(k))
+
+
+# ----------------------------
+# Team History Directory (matches where selected players were together)
+# ----------------------------
+def _norm_key(s: str) -> str:
+    if s is None:
+        return ""
+    s = str(s).replace("\u00A0", " ").replace("\u200B", "")
+    s = " ".join(s.strip().lower().split())
+    return s
+
+def _team_has_all(team_list: list[str], wanted: set[str]) -> bool:
+    team_set = {_norm_key(p) for p in (team_list or []) if str(p).strip()}
+    return wanted.issubset(team_set)
+
+def _parse_scoreline(score_txt: str):
+    try:
+        s = str(score_txt or "").strip()
+        if "-" in s:
+            a, b = s.split("-", 1)
+            return int(a.strip()), int(b.strip())
+    except Exception:
+        pass
+    return None, None
+
+def _outcome_for_selected_group(mrow, wanted_set: set[str], same_team_only: bool):
+    """
+    Returns: ("W"/"D"/"L"/None, side_str)
+    side_str is "A" or "B" when selected group is clearly on one side, else None.
+    """
+    ta = _split_team(mrow.get("team_a", ""))
+    tb = _split_team(mrow.get("team_b", ""))
+
+    ta_set = {_norm_key(p) for p in ta}
+    tb_set = {_norm_key(p) for p in tb}
+
+    in_a = len(ta_set.intersection(wanted_set))
+    in_b = len(tb_set.intersection(wanted_set))
+
+    # Decide which side is "the selected group" sits on
+    side = None
+    if same_team_only:
+        # group must be mainly on one side (your filter already enforces this)
+        side = "A" if in_a >= in_b else "B"
+    else:
+        # could be split across both teams; outcome doesn't make sense
+        return None, None
+
+    res = str(mrow.get("result", "") or "").strip().upper()
+    if res == "D":
+        res = "DRAW"
+
+    if res in ("DRAW", ""):
+        return ("D" if res == "DRAW" else None), side
+
+    if side == "A":
+        return ("W" if res == "A" else "L"), side
+    else:
+        return ("W" if res == "B" else "L"), side
+
+
+def _render_team_history_match_card(mrow, highlight_a: set[str], highlight_b: set[str], name_map: dict):
+    # Build pills for both teams; highlight selected players
+    ta = _split_team(mrow.get("team_a", ""))
+    tb = _split_team(mrow.get("team_b", ""))
+
+    def pill(p, highlight_set):
+        key = _norm_key(p)
+        cls = "pm-pill active" if key in (highlight_set or set()) else "pm-pill"
+        return f"<span class='{cls}'>{to_display(p, name_map)}</span>"
+
+    pills_a = "".join([pill(p, highlight_a) for p in ta])
+    pills_b = "".join([pill(p, highlight_b) for p in tb])
+
+    date_txt = str(mrow.get("date", "") or "").strip()
+    score_txt = str(mrow.get("score", "") or "").strip()
+    gA, gB = _parse_scoreline(score_txt)
+    big_score = f"{gA}–{gB}" if (gA is not None and gB is not None) else (score_txt if score_txt else "—")
+
+    html = f'''
+<div class="pm-card">
+  <div class="pm-top pm-scorebar">
+    <div class="pm-meta" style="text-align:center;width:100%;">{date_txt}</div>
+    <div class="pm-scoreline">
+      <span class="pm-scoreteam pm-a">Team A</span>
+      <span class="pm-score">{big_score}</span>
+      <span class="pm-scoreteam pm-b">Team B</span>
+    </div>
+  </div>
+
+  <div class="pm-grid">
+    <div class="pm-team a">
+      <div class="pm-team-h"><span>Team A Lineup</span></div>
+      <div class="pm-line">{pills_a}</div>
+    </div>
+
+    <div class="pm-team b">
+      <div class="pm-team-h"><span>Team B Lineup</span></div>
+      <div class="pm-line">{pills_b}</div>
+    </div>
+  </div>
+</div>
+'''
+    st.html(textwrap.dedent(html))
+
+def render_group_vs_group(matches_df: pd.DataFrame, all_players: list[str], name_map: dict, key_prefix: str):
+    """Matchup History: pick Group A + Group B and return historical matches where they faced each other.
+    Cards are normalised so Group A is always shown on the left (Team A panel).
+    """
+    c1, c2 = st.columns(2)
+    with c1:
+        group_a = st.multiselect(
+            "Group A",
+            options=all_players,
+            default=[],
+            key=f"{key_prefix}_a",
+            format_func=lambda k: to_display(k, name_map),
+        )
+    with c2:
+        group_b = st.multiselect(
+            "Group B",
+            options=all_players,
+            default=[],
+            key=f"{key_prefix}_b",
+            format_func=lambda k: to_display(k, name_map),
+        )
+
+    if len(group_a) == 0 or len(group_b) == 0:
+        st.info("Pick at least 1 player in each group.")
+        return
+
+    A = {_norm_key(p) for p in group_a}
+    B = {_norm_key(p) for p in group_b}
+
+    # Minimum overlap sliders (how many from each group must appear on their side)
+    s1, s2 = st.columns(2)
+    with s1:
+        if len(group_a) == 1:
+            min_a = 1
+            st.caption("Min from Group A on their side: **1**")
+        else:
+            min_a = st.slider(
+                "Min from Group A on their side",
+                min_value=1,
+                max_value=min(5, len(group_a)),
+                value=min(2, len(group_a)),
+                step=1,
+                key=f"{key_prefix}_min_a",
+            )
+    with s2:
+        if len(group_b) == 1:
+            min_b = 1
+            st.caption("Min from Group B on their side: **1**")
+        else:
+            min_b = st.slider(
+                "Min from Group B on their side",
+                min_value=1,
+                max_value=min(5, len(group_b)),
+                value=min(2, len(group_b)),
+                step=1,
+                key=f"{key_prefix}_min_b",
+            )
+
+    def _counts(team_list: list[str], group_set: set[str]) -> int:
+        team_set = {_norm_key(p) for p in (team_list or []) if str(p).strip()}
+        return len(team_set.intersection(group_set))
+
+    # Sorting newest-first
+    df = matches_df.copy()
+    df["__dt"] = pd.to_datetime(df.get("date", None), errors="coerce")
+    df = df.sort_values("__dt", ascending=False, na_position="last")
+
+    # Filter matches
+    hits = []
+    a_wins = b_wins = draws = 0
+
+    for _, r in df.iterrows():
+        ta = _split_team(r.get("team_a", ""))
+        tb = _split_team(r.get("team_b", ""))
+
+        a_in_a = _counts(ta, A)
+        a_in_b = _counts(tb, A)
+        b_in_a = _counts(ta, B)
+        b_in_b = _counts(tb, B)
+
+        # Must have the groups on opposite teams, meeting overlap thresholds
+        ok_ab = (a_in_a >= int(min_a) and b_in_b >= int(min_b))
+        ok_ba = (a_in_b >= int(min_a) and b_in_a >= int(min_b))
+        if not (ok_ab or ok_ba):
+            continue
+
+        # Decide which side Group A was on in this match (for record + card normalisation)
+        group_a_side = "A" if ok_ab else "B"
+
+        # Record
+        res = str(r.get("result", "") or "").strip().upper()
+        if res == "D":
+            res = "DRAW"
+
+        if res == "DRAW":
+            draws += 1
+        elif (group_a_side == "A" and res == "A") or (group_a_side == "B" and res == "B"):
+            a_wins += 1
+        else:
+            b_wins += 1
+
+        # Store row + which side Group A was on
+        rr = r.copy()
+        rr["__group_a_side"] = group_a_side
+        hits.append(rr)
+
+    if not hits:
+        st.info("No historical matches found where Group A faced Group B (in this season view).")
+        return
+
+    out = pd.DataFrame(hits)
+
+    # Summary
+    total = len(out)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Matches", total)
+    c2.metric("Group A Wins", a_wins)
+    c3.metric("Draws", draws)
+    c4.metric("Group B Wins", b_wins)
+
+    # Render cards with Group A always on the left
+    for _, r in out.iterrows():
+        group_a_side = str(r.get("__group_a_side", "A"))
+
+        # If Group A was on Team B in the stored data, swap teams (and swap scoreline)
+        if group_a_side == "B":
+            # swap team strings
+            r2 = r.copy()
+            r2["team_a"], r2["team_b"] = r.get("team_b", ""), r.get("team_a", "")
+
+            # swap scoreline if parsable
+            gA, gB = _parse_scoreline(str(r.get("score", "") or ""))
+            if gA is not None and gB is not None:
+                r2["score"] = f"{gB}-{gA}"
+            _render_team_history_match_card(r2, A, B, name_map)
+        else:
+            _render_team_history_match_card(r, A, B, name_map)
+
+
+def render_team_history_directory(matches_df: pd.DataFrame, all_players: list[str], name_map: dict, key_prefix: str = "thd"):
+    """Teammate History: pick players and list matches where they were together on the SAME team."""
+    # Lightweight CSS (matched to Team Generator "Past Matchups")
+    st.markdown(
+        '''
+        <style>
+        .pm-card{
+          border-radius:16px;
+          padding:16px 18px;
+          border:1px solid rgba(255,255,255,0.10);
+          background:linear-gradient(180deg, rgba(255,255,255,0.05), rgba(0,0,0,0.0));
+          box-shadow:0 0 16px rgba(0,0,0,0.55);
+          margin-top:10px;
+        }
+        .pm-top{display:flex;align-items:center;margin-bottom:6px;}
+        .pm-scorebar{flex-direction:column;justify-content:center;gap:6px;margin-bottom:12px;}
+        .pm-scoreline{display:flex;justify-content:center;align-items:baseline;gap:18px;}
+        .pm-scoreteam{
+          font-size:2.2rem;font-weight:1000;letter-spacing:0.5px;
+          text-shadow:0 3px 20px rgba(0,0,0,0.65);opacity:0.95;white-space:nowrap;
+        }
+        .pm-scoreteam.pm-a{ color:#93c5fd; }
+        .pm-scoreteam.pm-b{ color:#fca5a5; }
+        .pm-meta{color:#cfcfcf;opacity:0.9;font-size:0.95rem;}
+        .pm-score{font-size:2.2rem;font-weight:1000;letter-spacing:1px;color:#ffffff;text-shadow:0 3px 20px rgba(0,0,0,0.65);}
+        .pm-grid{display:grid;grid-template-columns: 1fr 1fr;gap:14px;}
+        .pm-team{border-radius:14px;padding:12px 14px;border:1px solid rgba(255,255,255,0.10);background:rgba(255,255,255,0.03);}
+        .pm-team.a{background:linear-gradient(135deg, rgba(59,130,246,0.14), rgba(255,255,255,0.02));border:1px solid rgba(59,130,246,0.22);}
+        .pm-team.b{background:linear-gradient(225deg, rgba(239,68,68,0.14), rgba(255,255,255,0.02));border:1px solid rgba(239,68,68,0.22);}
+        .pm-team-h{font-weight:900;font-size:1.05rem;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;}
+        .pm-line{display:flex;flex-wrap:wrap;gap:8px;}
+        .pm-pill{
+          padding:6px 10px;border-radius:999px;font-weight:800;font-size:0.98rem;
+          border:1px solid rgba(255,255,255,0.10);background:rgba(255,255,255,0.04);
+        }
+        /* Selected players */
+        .pm-pill.active{
+          background:rgba(34,197,94,0.14);
+          border:1px solid rgba(34,197,94,0.40);
+          color:#bbf7d0;
+          box-shadow:0 0 10px rgba(34,197,94,0.10);
+        }
+        </style>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+    default = st.session_state.get(f"{key_prefix}_default", []) or []
+
+    sel_players = st.multiselect(
+        "Players",
+        options=all_players,
+        default=default,
+        key=f"{key_prefix}_players",
+        format_func=lambda k: to_display(k, name_map),
+    )
+
+    if len(sel_players) < 2:
+        st.info("Select at least 2 players to search.")
+        return
+
+    wanted = {_norm_key(p) for p in sel_players}
+
+    # For 2 players: fixed = 2 (no slider)
+    if len(sel_players) == 2:
+        min_together = 2
+        st.caption("Minimum selected players together: **2**")
+    else:
+        min_together = st.slider(
+            "Minimum selected players together",
+            min_value=2,
+            max_value=min(5, len(sel_players)),
+            value=min(3, len(sel_players)),
+            step=1,
+            key=f"{key_prefix}_min_together",
+            help="Return matches where at least this many of the selected players appeared together on the SAME team.",
+        )
+
+    def overlap_count(team_list: list[str]) -> int:
+        team_set = {_norm_key(p) for p in (team_list or []) if str(p).strip()}
+        return len(team_set.intersection(wanted))
+
+    df = matches_df.copy()
+    df["__dt"] = pd.to_datetime(df.get("date", None), errors="coerce")
+    df = df.sort_values("__dt", ascending=False, na_position="last")
+
+    hits = []
+    for _, r in df.iterrows():
+        ta = _split_team(r.get("team_a", ""))
+        tb = _split_team(r.get("team_b", ""))
+
+        a_n = overlap_count(ta)
+        b_n = overlap_count(tb)
+
+        # ALWAYS same-team logic for Teammate History
+        if max(a_n, b_n) < int(min_together):
+            continue
+
+        hits.append(r)
+
+    if not hits:
+        st.info("No matches found for that combination (in this season view).")
+        return
+
+    out = pd.DataFrame(hits)
+
+    # -------------------------
+    # Auto summary (W/D/L + win % + avg goal diff)
+    # -------------------------
+    w = d = l = 0
+    goal_diffs = []
+    scorelines = []
+
+    for _, r0 in out.iterrows():
+        # same_team_only=True because this directory is always same-team
+        outcome, _ = _outcome_for_selected_group(r0, wanted, same_team_only=True)
+        if outcome == "W":
+            w += 1
+        elif outcome == "D":
+            d += 1
+        elif outcome == "L":
+            l += 1
+
+        gA, gB = _parse_scoreline(str(r0.get("score", "") or ""))
+        if gA is not None and gB is not None:
+            goal_diffs.append(abs(gA - gB))
+            scorelines.append((abs(gA - gB), f"{gA}–{gB}", str(r0.get("date", "") or "")))
+
+    total = len(out)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Matches", total)
+    c2.metric("W-D-L", f"{w}-{d}-{l}")
+    win_pct = (w / total * 100) if total else 0.0
+    c3.metric("Win %", f"{win_pct:.1f}%")
+    if goal_diffs:
+        c4.metric("Avg Goal Diff", f"{(sum(goal_diffs)/len(goal_diffs)):.2f}")
+    else:
+        c4.metric("Avg Goal Diff", "—")
+
+    st.markdown(f"**Found:** {len(out)} match(es)")
+
+    # Render (always expanded; no collapse toggle)
+    def _highlight_sets_for_row(row):
+        ta = _split_team(row.get("team_a", ""))
+        tb = _split_team(row.get("team_b", ""))
+        a_n = overlap_count(ta)
+        b_n = overlap_count(tb)
+        # Highlight only the selected players that are on the SAME team that triggered the match
+        if a_n >= int(min_together) and a_n >= b_n:
+            ha = {_norm_key(p) for p in ta}.intersection(wanted)
+            hb = set()
+        elif b_n >= int(min_together):
+            ha = set()
+            hb = {_norm_key(p) for p in tb}.intersection(wanted)
+        else:
+            ha = set()
+            hb = set()
+        return ha, hb
+
+    for _, r in out.iterrows():
+        ha, hb = _highlight_sets_for_row(r)
+        _render_team_history_match_card(r, ha, hb, name_map)
 
 
 def get_season_filter_ui(matches_df: pd.DataFrame, suffix=""):
@@ -426,8 +834,6 @@ def render_global_overview(suffix="", season_mode=None, selected_year=None, seas
 
                 st.dataframe(rival_display, use_container_width=True, hide_index=True)
 
-        st.divider()
-        render_mmr_progression_over_time(suffix=suffix, season_mode=season_mode, selected_year=selected_year, season_start=season_start, matches=matches)
 
     finally:
         conn.close()
@@ -1084,3 +1490,41 @@ def render_charts_page():
 
     with st.expander("⚔️ Head-to-Head & 🤝 Duo Chemistry", expanded=False):
         render_head_to_head_section(season_mode, selected_year, season_start, matches_filtered)
+    # ------------------------------
+    # 📚 Teammate History (Top-level dropdown)
+    # ------------------------------
+    with st.expander("📚 Teammate History", expanded=False):
+        name_map = get_name_map_cached(get_current_league_id())
+
+        players_df = sql_df(
+            "SELECT name FROM public.players WHERE league_id=%s ORDER BY name",
+            (league_id,),
+        )
+        all_players = sorted(players_df["name"].dropna().astype(str).tolist())
+
+        render_team_history_directory(
+            matches_filtered,
+            all_players,
+            name_map,
+            key_prefix="thd_main",
+        )
+
+
+    # ------------------------------
+    # 🆚 Matchup History (Team A vs Team B)
+    # ------------------------------
+    with st.expander("🆚 Matchup History", expanded=False):
+        name_map = get_name_map_cached(get_current_league_id())
+
+        players_df = sql_df(
+            "SELECT name FROM public.players WHERE league_id=%s ORDER BY name",
+            (league_id,),
+        )
+        all_players = sorted(players_df["name"].dropna().astype(str).tolist())
+
+        render_group_vs_group(
+            matches_filtered,
+            all_players,
+            name_map,
+            key_prefix="gvg_main",
+        )

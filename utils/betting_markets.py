@@ -89,6 +89,35 @@ def _prob_1x2(M: np.ndarray) -> Dict[str, float]:
                 p2 += p
     return {"1": p1, "X": pX, "2": p2}
 
+def _prob_1x2_smart(
+    M: np.ndarray,
+    team_a_now: list[str],
+    team_b_now: list[str],
+) -> tuple[Dict[str, float], dict]:
+    """
+    Start from Poisson 1X2, then apply a small head-to-head adjustment (4v4+ similar meetings),
+    shrunk for subs and adjusted for chemistry/quality.
+    """
+    base = _prob_1x2(M)  # {"1","X","2"}
+    delta, dbg = _head_to_head_adjustment(team_a_now, team_b_now)
+
+    p1 = float(base["1"])
+    pX = float(base["X"])
+    p2 = float(base["2"])
+
+    # Apply delta to the win probs, keep draw fixed, then renormalize
+    p1 = _clamp(p1 + delta, 1e-6, 0.999)
+    p2 = _clamp(p2 - delta, 1e-6, 0.999)
+
+    s = p1 + pX + p2
+    if s <= 0:
+        return base, dbg
+
+    out = {"1": p1 / s, "X": pX / s, "2": p2 / s}
+    dbg["base"] = base
+    dbg["after"] = out
+    return out, dbg
+
 
 def _prob_win_margin(M: np.ndarray) -> Dict[str, float]:
     # M[i,j] = P(A=i,B=j)
@@ -156,6 +185,7 @@ def _best_totals_line(M: np.ndarray, lo: float = 3.5, hi: float = 17.5, step: fl
 
 import pandas as pd
 from utils.team_ai_engine import get_engine_state  # uses DB matches + players
+from utils.team_ai_engine import clean_name
 
 def _parse_score_from_row(r: pd.Series) -> tuple[int | None, int | None]:
     # Try common DB fields first
@@ -198,6 +228,232 @@ def _split_team(val: str) -> list[str]:
         if name:
             cleaned.append(name.strip().lower())
     return cleaned
+
+def _team_key_set(team: list[str]) -> set[str]:
+    return {clean_name(p) for p in (team or []) if str(p).strip()}
+
+def _overlap_count(team_now: list[str], team_hist: list[str]) -> int:
+    return len(_team_key_set(team_now) & _team_key_set(team_hist))
+
+def _best_orientation(
+    team_a_now: list[str],
+    team_b_now: list[str],
+    ta_hist: list[str],
+    tb_hist: list[str],
+) -> tuple[str, int, int, list[str], list[str]]:
+    """
+    Returns (orientation, overlapA, overlapB, histA_aligned, histB_aligned)
+    orientation: "same" or "swapped"
+    """
+    oa1 = _overlap_count(team_a_now, ta_hist)
+    ob1 = _overlap_count(team_b_now, tb_hist)
+    score1 = oa1 + ob1
+
+    oa2 = _overlap_count(team_a_now, tb_hist)
+    ob2 = _overlap_count(team_b_now, ta_hist)
+    score2 = oa2 + ob2
+
+    if score2 > score1:
+        return "swapped", oa2, ob2, tb_hist, ta_hist
+    return "same", oa1, ob1, ta_hist, tb_hist
+
+def _avg_chem_with_team(p: str, team: list[str], base_chem: dict) -> float:
+    """
+    Average chemistry between p and everyone in team (excluding p).
+    base_chem keys can be (a,b) tuples or "a|b" strings (your engine supports both).
+    """
+    pk = clean_name(p)
+    vals = []
+    for t in team:
+        tk = clean_name(t)
+        if tk == pk:
+            continue
+
+        v = 0.0
+        if (pk, tk) in base_chem:
+            v = float(base_chem.get((pk, tk)) or 0.0)
+        elif (tk, pk) in base_chem:
+            v = float(base_chem.get((tk, pk)) or 0.0)
+        else:
+            s1 = f"{pk}|{tk}"
+            s2 = f"{tk}|{pk}"
+            if s1 in base_chem:
+                v = float(base_chem.get(s1) or 0.0)
+            elif s2 in base_chem:
+                v = float(base_chem.get(s2) or 0.0)
+
+        vals.append(v)
+
+    return float(np.mean(vals)) if vals else 0.0
+
+def _head_to_head_adjustment(
+    team_a_now: list[str],
+    team_b_now: list[str],
+    *,
+    min_overlap: int = 4,
+    top_n: int = 3,
+    gd_cap: int = 6,
+    max_shift: float = 0.08,
+) -> tuple[float, dict]:
+    """
+    Returns (delta_to_teamA_win_prob, debug)
+    Positive delta => nudges towards Team A.
+
+    Uses similar historical meetings with >= min_overlap on BOTH sides (4v4+),
+    allowing swapped orientation. Dominance is capped by gd_cap and shrunk by:
+      - how many players changed (subs)
+      - MMR quality difference between sub-ins vs sub-outs
+      - chemistry fit of sub-ins vs sub-outs
+    """
+    state = get_engine_state(force_reload=False)
+    matches: pd.DataFrame = state.get("matches", pd.DataFrame()).copy()
+    players: pd.DataFrame = state.get("players", pd.DataFrame()).copy()
+    base_chem: dict = state.get("base_chemistry", {}) or {}
+
+    if matches is None or matches.empty:
+        return 0.0, {"mode": "no_matches"}
+
+    # Most recent match should not be used to price "right now" (leakage).
+    # But it SHOULD be used a month later. We’ll do this by only dropping if it's the very latest row.
+    # (If date exists, drop the newest; else drop last row.)
+    try:
+        if "date" in matches.columns:
+            dt = pd.to_datetime(matches["date"], errors="coerce")
+            if dt.notna().any():
+                matches = matches.drop(index=dt.idxmax())
+        else:
+            matches = matches.iloc[:-1]
+    except Exception:
+        pass
+
+    # MMR lookup (for sub quality)
+    mmr_map = {}
+    try:
+        if not players.empty and "name" in players.columns and "mmr" in players.columns:
+            for _, r in players.iterrows():
+                mmr_map[clean_name(str(r.get("name") or ""))] = float(r.get("mmr") or 0.0)
+    except Exception:
+        mmr_map = {}
+
+    def mmr_of(name: str) -> float:
+        return float(mmr_map.get(clean_name(name), 0.0))
+
+    # scan for similar meetings
+    candidates = []
+    for _, r in matches.iterrows():
+        ta_hist = _split_team(r.get("team_a", ""))
+        tb_hist = _split_team(r.get("team_b", ""))
+        if not ta_hist or not tb_hist:
+            continue
+
+        ga, gb = _parse_score_from_row(r)
+        if ga is None or gb is None:
+            continue
+
+        orient, oa, ob, histA, histB = _best_orientation(team_a_now, team_b_now, ta_hist, tb_hist)
+
+        if oa < min_overlap or ob < min_overlap:
+            continue
+
+        # Align score to orientation
+        # If swapped, then "Team A now" corresponds to historical team_b,
+        # so goals for "aligned A" are gb not ga.
+        if orient == "same":
+            gA, gB = int(ga), int(gb)
+        else:
+            gA, gB = int(gb), int(ga)
+
+        # dominance signal (capped GD)
+        gd = gA - gB
+        gd = max(-gd_cap, min(gd_cap, gd))
+
+        # subs compared to this historical aligned matchup
+        nowA = _team_key_set(team_a_now); nowB = _team_key_set(team_b_now)
+        histA_set = _team_key_set(histA);  histB_set = _team_key_set(histB)
+
+        sub_in_A = [p for p in team_a_now if clean_name(p) not in histA_set]
+        sub_out_A = [p for p in histA if clean_name(p) not in nowA]
+        sub_in_B = [p for p in team_b_now if clean_name(p) not in histB_set]
+        sub_out_B = [p for p in histB if clean_name(p) not in nowB]
+
+        # shrink for number of swaps (each swap reduces transferability a bit)
+        swaps = max(len(sub_in_A), len(sub_out_A)) + max(len(sub_in_B), len(sub_out_B))
+        w_swaps = 0.92 ** swaps  # 1 swap ≈ 0.92, 2 swaps ≈ 0.85, etc.
+
+        # adjust for quality of replacements (MMR in - MMR out)
+        def rep_delta(sub_in, sub_out):
+            if not sub_in and not sub_out:
+                return 0.0
+            mmr_in = float(np.mean([mmr_of(x) for x in sub_in])) if sub_in else 0.0
+            mmr_out = float(np.mean([mmr_of(x) for x in sub_out])) if sub_out else 0.0
+            return mmr_in - mmr_out
+
+        # Positive means Team A got stronger vs that historical match
+        repA = rep_delta(sub_in_A, sub_out_A)
+        repB = rep_delta(sub_in_B, sub_out_B)
+        # Convert to a mild multiplier (don’t let MMR dominate)
+        w_rep = _clamp(1.0 + (repA - repB) / 1200.0, 0.75, 1.25)
+
+        # adjust for chemistry fit of incoming vs outgoing
+        def chem_delta(sub_in, sub_out, team_now):
+            if not sub_in and not sub_out:
+                return 0.0
+            ci = float(np.mean([_avg_chem_with_team(x, team_now, base_chem) for x in sub_in])) if sub_in else 0.0
+            co = float(np.mean([_avg_chem_with_team(x, team_now, base_chem) for x in sub_out])) if sub_out else 0.0
+            return ci - co
+
+        chemA = chem_delta(sub_in_A, sub_out_A, team_a_now)
+        chemB = chem_delta(sub_in_B, sub_out_B, team_b_now)
+        # Mild multiplier
+        w_chem = _clamp(1.0 + (chemA - chemB) / 8.0, 0.80, 1.20)
+
+        # Recency weight (if date exists)
+        w_time = 1.0
+        try:
+            val = r.get("date", None)
+            if val is not None and str(val).strip() != "":
+                d = pd.to_datetime(str(val), errors="coerce")
+                if pd.notna(d):
+                    days = (pd.Timestamp.utcnow() - d).days
+                    w_time = float(np.exp(-days / 30.0))
+        except Exception:
+            w_time = 1.0
+
+        w = float(w_swaps * w_rep * w_chem * w_time)
+
+        candidates.append(
+            {
+                "w": w,
+                "gd": gd,
+                "orient": orient,
+                "oa": oa,
+                "ob": ob,
+                "date": r.get("date", None),
+            }
+        )
+
+    if not candidates:
+        return 0.0, {"mode": "no_similar_meetings"}
+
+    # take top_n by weight
+    candidates.sort(key=lambda x: x["w"], reverse=True)
+    top = candidates[: max(1, int(top_n))]
+
+    # convert GD into small probability shifts and average them
+    # 1 goal of capped GD => 1% shift (tunable)
+    shifts = [0.01 * float(c["gd"]) for c in top]
+    weights = [float(c["w"]) for c in top]
+    delta = float(np.average(shifts, weights=weights)) if sum(weights) > 0 else float(np.mean(shifts))
+
+    # cap the final shift (max ±8%)
+    delta = _clamp(delta, -max_shift, max_shift)
+
+    dbg = {
+        "mode": "h2h",
+        "delta": delta,
+        "used": top,
+    }
+    return delta, dbg
 
 
 def estimate_expected_goals_from_history(
@@ -341,6 +597,8 @@ def build_markets(
     exp_goals_a: float,
     exp_goals_b: float,
     *,
+    team_a_now: list[str] | None = None,
+    team_b_now: list[str] | None = None,
     overround: float = 1.06,
     max_goals: int = 15,
     total_lines: List[float] | None = None,
@@ -358,7 +616,10 @@ def build_markets(
       - Optionally includes +/- 2 goals as alternates
     """
     M = _score_matrix(exp_goals_a, exp_goals_b, max_goals=max_goals)
-    mx_probs = _prob_1x2(M)
+    team_a_now = team_a_now or []
+    team_b_now = team_b_now or []
+
+    mx_probs, mx_dbg = _prob_1x2_smart(M, team_a_now=team_a_now, team_b_now=team_b_now)
     mx_prices = _probs_to_prices(mx_probs, overround=overround)
 
 
@@ -380,7 +641,7 @@ def build_markets(
         totals[ln] = _probs_to_prices(ou_probs, overround=overround)
 
     return {
-        "match_odds": {"prices": mx_prices},
+        "match_odds": {"prices": mx_prices, "debug": mx_dbg},
         "winning_margin": {"prices": wm_prices},
         "total_goals": {"main_line": float(main), "lines": totals},
     }

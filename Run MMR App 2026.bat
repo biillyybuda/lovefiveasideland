@@ -13,6 +13,6 @@ echo Using venv312 Python:
 venv312\Scripts\python.exe --version
 
 echo Launching Streamlit from venv312...
-venv312\Scripts\python.exe -m streamlit run app.py
-
+venv312\Scripts\python.exe -m streamlit run app.py --server.address localhost --server.port 8501
+start "" http://localhost:8501
 pause

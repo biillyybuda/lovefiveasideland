@@ -1063,6 +1063,8 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
     markets = build_markets(
         lam_a,
         lam_b,
+        team_a_now=team_a,
+        team_b_now=team_b,
         overround=1.06,
         max_goals=15,
         total_lines=None,
@@ -1211,7 +1213,7 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
         # Winning Margin
         with st.expander("Winning Margin", expanded=False):
             wm = markets["winning_margin"]["prices"]
-            order = ["A 1–2", "A 3+", "Draw", "B 1–2", "B 3+"]
+            order = ["A 3+", "A 1–2", "Draw", "B 1–2", "B 3+"]
             items = []
             for k in order:
                 d = wm[k]
@@ -1609,6 +1611,37 @@ def render_team_generator_page(show_header: bool = True):
                 f"- Difference: `{float(breakdown.get('chem_diff', 0)):.2f}`"
             )
 
+
+            st.write("**Chemistry density & links**")
+            st.markdown(
+                f"- Density A / B: `{float(breakdown.get('chem_density_a', 0)):.2f}` vs `{float(breakdown.get('chem_density_b', 0)):.2f}`  \n"
+                f"- Density diff: `{float(breakdown.get('chem_density_diff', 0)):.2f}`  \n"
+                f"- Top-link share A / B: `{float(breakdown.get('chem_top_share_a', 0)):.2f}` vs `{float(breakdown.get('chem_top_share_b', 0)):.2f}`"
+            )
+
+            
+            st.write("**Trio synergy (triangle chemistry)**")
+            st.markdown(
+                f"- Trio synergy A / B: `{float(breakdown.get('trio_a', 0)):.2f}` vs `{float(breakdown.get('trio_b', 0)):.2f}`  \n"
+                f"- Difference: `{float(breakdown.get('trio_diff', 0)):.2f}`  \n"
+                f"- Trio density A / B: `{float(breakdown.get('trio_density_a', 0)):.2f}` vs `{float(breakdown.get('trio_density_b', 0)):.2f}`  \n"
+                f"- Negative trio total (penalty): `{float(breakdown.get('trio_negative_total', 0)):.2f}`"
+            )
+
+            st.write("**Bad pairings (avoid these links)**")
+            st.markdown(
+                f"- Bad-pair score A / B: `{float(breakdown.get('badpair_a', 0)):.2f}` vs `{float(breakdown.get('badpair_b', 0)):.2f}`  \n"
+                f"- Total badness: `{float(breakdown.get('badpair_total', 0)):.2f}`"
+            )
+
+            st.write("**Matchup memory**")
+            sim = breakdown.get("similarity_debug", {}) or {}
+            st.markdown(
+                f"- Similarity penalty: `{float(breakdown.get('similarity_penalty', 0)):.2f}`  \n"
+                f"- Closest historic similarity: `{float(sim.get('similarity', 0)):.2f}`"
+                + (f"  \n- Historic score: `{sim.get('score')}`" if sim.get('score') else "")
+                + (f"  \n- Historic date: `{sim.get('date')}`" if sim.get('date') else "")
+            )
             st.write("**Combined Score**")
             st.markdown(f"- Total: **`{float(breakdown.get('fairness_score', score)):.2f}`**")
 
