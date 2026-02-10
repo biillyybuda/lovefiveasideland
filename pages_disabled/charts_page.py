@@ -92,7 +92,15 @@ def _outcome_for_selected_group(mrow, wanted_set: set[str], same_team_only: bool
         return ("W" if res == "B" else "L"), side
 
 
-def _render_team_history_match_card(mrow, highlight_a: set[str], highlight_b: set[str], name_map: dict):
+def _render_team_history_match_card(
+    mrow,
+    highlight_a: set[str],
+    highlight_b: set[str],
+    name_map: dict,
+    compare_a: set[str] | None = None,
+    compare_b: set[str] | None = None,
+    changes_label: str = "Changes vs selected lineup",
+):
     # Build pills for both teams; highlight selected players
     ta = _split_team(mrow.get("team_a", ""))
     tb = _split_team(mrow.get("team_b", ""))
@@ -104,6 +112,50 @@ def _render_team_history_match_card(mrow, highlight_a: set[str], highlight_b: se
 
     pills_a = "".join([pill(p, highlight_a) for p in ta])
     pills_b = "".join([pill(p, highlight_b) for p in tb])
+
+    # --- Changes vs selected lineup (optional) ---
+    def _changes_block(team_list: list[str], compare_set: set[str] | None):
+        if not compare_set:
+            return ""
+        team_set = {_norm_key(p) for p in team_list if str(p).strip()}
+
+        outs = sorted(list(team_set - compare_set))
+        ins = sorted(list(compare_set - team_set))
+
+        if not outs and not ins:
+            return f"<div class='pm-changes'><div class='pm-changes-h'>{changes_label}</div><div class='pm-changes-none'>No changes</div></div>"
+
+        # Pair off outs -> ins like substitutions
+        pairs = []
+        for i in range(min(len(outs), len(ins))):
+            o = outs[i]
+            n = ins[i]
+            pairs.append(
+                f"<div class='pm-swap'><span class='pm-pill pm-out'>{to_display(o, name_map)}</span>"
+                f"<span class='pm-arrow'>→</span>"
+                f"<span class='pm-pill pm-in'>{to_display(n, name_map)}</span></div>"
+            )
+
+        extra_out = outs[len(pairs):]
+        extra_in = ins[len(pairs):]
+
+        extras_html = ""
+        if extra_out:
+            extras_html += "<div class='pm-extras'><span class='pm-extras-h'>Also out:</span> " + ", ".join(to_display(x, name_map) for x in extra_out) + "</div>"
+        if extra_in:
+            extras_html += "<div class='pm-extras'><span class='pm-extras-h'>Also in:</span> " + ", ".join(to_display(x, name_map) for x in extra_in) + "</div>"
+
+        swaps_html = "".join(pairs) if pairs else ""
+        return f"""
+        <div class='pm-changes'>
+          <div class='pm-changes-h'>{changes_label}</div>
+          {swaps_html if swaps_html else ""}
+          {extras_html if extras_html else ""}
+        </div>
+        """
+
+    changes_a_html = _changes_block(ta, compare_a)
+    changes_b_html = _changes_block(tb, compare_b)
 
     date_txt = str(mrow.get("date", "") or "").strip()
     score_txt = str(mrow.get("score", "") or "").strip()
@@ -125,11 +177,13 @@ def _render_team_history_match_card(mrow, highlight_a: set[str], highlight_b: se
     <div class="pm-team a">
       <div class="pm-team-h"><span>Team A Lineup</span></div>
       <div class="pm-line">{pills_a}</div>
+      {changes_a_html}
     </div>
 
     <div class="pm-team b">
       <div class="pm-team-h"><span>Team B Lineup</span></div>
       <div class="pm-line">{pills_b}</div>
+      {changes_b_html}
     </div>
   </div>
 </div>
@@ -270,9 +324,9 @@ def render_group_vs_group(matches_df: pd.DataFrame, all_players: list[str], name
             gA, gB = _parse_scoreline(str(r.get("score", "") or ""))
             if gA is not None and gB is not None:
                 r2["score"] = f"{gB}-{gA}"
-            _render_team_history_match_card(r2, A, B, name_map)
+            _render_team_history_match_card(r2, A, B, name_map, compare_a=A, compare_b=B, changes_label="Changes vs selected lineup")
         else:
-            _render_team_history_match_card(r, A, B, name_map)
+            _render_team_history_match_card(r, A, B, name_map, compare_a=A, compare_b=B, changes_label="Changes vs selected lineup")
 
 
 def render_team_history_directory(matches_df: pd.DataFrame, all_players: list[str], name_map: dict, key_prefix: str = "thd"):
@@ -317,6 +371,15 @@ def render_team_history_directory(matches_df: pd.DataFrame, all_players: list[st
           color:#bbf7d0;
           box-shadow:0 0 10px rgba(34,197,94,0.10);
         }
+        .pm-changes{margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);}
+        .pm-changes-h{font-weight:900;font-size:0.9rem;color:rgba(255,255,255,0.75);margin-bottom:6px;}
+        .pm-changes-none{color:rgba(255,255,255,0.55);font-size:0.9rem;}
+        .pm-swap{display:flex;align-items:center;gap:10px;margin:6px 0;flex-wrap:wrap;}
+        .pm-arrow{opacity:0.7;font-weight:900;}
+        .pm-pill.pm-out{border-color:rgba(239,68,68,0.35);background:rgba(239,68,68,0.08);color:#fecaca;}
+        .pm-pill.pm-in{border-color:rgba(34,197,94,0.35);background:rgba(34,197,94,0.10);color:#bbf7d0;}
+        .pm-extras{margin-top:6px;color:rgba(255,255,255,0.65);font-size:0.9rem;line-height:1.25;}
+        .pm-extras-h{font-weight:900;color:rgba(255,255,255,0.75);}
         </style>
         ''',
         unsafe_allow_html=True,

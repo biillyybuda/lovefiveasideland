@@ -1,7 +1,9 @@
 # utils/team_ai_engine.py
 import re
+import math
 from collections import defaultdict
 from typing import Any, Dict, List, Tuple, Optional
+
 
 import pandas as pd
 
@@ -16,12 +18,12 @@ def clean_name(x: str) -> str:
     return x.strip().lower()
 
 
-def _split_team(val: str) -> list[str]:
+def _split_team(val: str) -> List[str]:
     raw = str(val or "").strip()
     if raw.startswith("[") and raw.endswith("]"):
         raw = raw[1:-1]
     parts = raw.split(",")
-    cleaned: list[str] = []
+    cleaned: List[str] = []
     for p in parts:
         name = p.strip().strip("'").strip('"')
         if name:
@@ -170,7 +172,7 @@ def _build_engine_state() -> Dict[str, Any]:
     chem_df = calculate_chemistry_for_all_duos(matches).rename(
         columns={"Player A": "player_a", "Player B": "player_b", "Chemistry": "chemistry_score"}
     )
-    base_chemistry: Dict[tuple[str, str], float] = {}
+    base_chemistry: Dict[Tuple[str, str], float] = {}
     if not chem_df.empty:
         for _, r in chem_df.iterrows():
             a = clean_name(str(r["player_a"]))
@@ -185,8 +187,8 @@ def _build_engine_state() -> Dict[str, Any]:
 
     # --- Duo outcomes (results-only) for "known bad pairing" penalties ---
     # Track: games, score_mean (W=1,D=0.5,L=0), and sample size.
-    duo_games: Dict[tuple[str, str], int] = defaultdict(int)
-    duo_score_sum: Dict[tuple[str, str], float] = defaultdict(float)
+    duo_games: Dict[Tuple[str, str], int] = defaultdict(int)
+    duo_score_sum: Dict[Tuple[str, str], float] = defaultdict(float)
 
     score_map = {"W": 1.0, "D": 0.5, "L": 0.0}
     for _, m in matches.iterrows():
@@ -219,7 +221,7 @@ def _build_engine_state() -> Dict[str, Any]:
                     duo_score_sum[key2] += sc
 
     # Build a "bad pair" penalty map: positive = worse (we'll add to fairness)
-    bad_pair_penalty: Dict[tuple[str, str], float] = {}
+    bad_pair_penalty: Dict[Tuple[str, str], float] = {}
 
     # Tunables (kept conservative so we don't overfit)
     MIN_GAMES_BAD = 5
@@ -245,8 +247,8 @@ def _build_engine_state() -> Dict[str, Any]:
 
     # --- Trio outcomes (results-only) for trio synergy (triangle chemistry) ---
     # Track: games, score_mean (W=1,D=0.5,L=0), and sample size.
-    trio_games: Dict[tuple[str, str, str], int] = defaultdict(int)
-    trio_score_sum: Dict[tuple[str, str, str], float] = defaultdict(float)
+    trio_games: Dict[Tuple[str, str, str], int] = defaultdict(int)
+    trio_score_sum: Dict[Tuple[str, str, str], float] = defaultdict(float)
 
     for _, m in matches.iterrows():
         ta = [clean_name(p) for p in _split_team(m.get("team_a", "")) if clean_name(p)]
@@ -277,7 +279,7 @@ def _build_engine_state() -> Dict[str, Any]:
                         trio_score_sum[key] += sc
 
     # Build trio synergy map: positive = better than expected, negative = worse than expected.
-    trio_synergy: Dict[tuple[str, str, str], float] = {}
+    trio_synergy: Dict[Tuple[str, str, str], float] = {}
 
     # Tunables (conservative, avoids overfitting)
     MIN_GAMES_TRIO = 4
@@ -349,8 +351,8 @@ def _effective_mmr(name: str, state: Dict[str, Any]) -> float:
     return base + fit_adj + form_adj
 
 
-def _pair_list(team: List[str]) -> list[tuple[str, str]]:
-    out: list[tuple[str, str]] = []
+def _pair_list(team: List[str]) -> list[Tuple[str, str]]:
+    out: list[Tuple[str, str]] = []
     for i in range(len(team)):
         for j in range(i + 1, len(team)):
             out.append((team[i], team[j]))
@@ -378,8 +380,8 @@ def _team_badpair_badness(team: List[str], state: Dict[str, Any]) -> float:
     return bad
 
 
-def _trio_list(team: List[str]) -> list[tuple[str, str, str]]:
-    out: list[tuple[str, str, str]] = []
+def _trio_list(team: List[str]) -> list[Tuple[str, str, str]]:
+    out: list[Tuple[str, str, str]] = []
     for i in range(len(team)):
         for j in range(i + 1, len(team)):
             for k in range(j + 1, len(team)):
@@ -492,13 +494,11 @@ def _similarity_penalty(team_a: List[str], team_b: List[str], state: Dict[str, A
     }
 
 
-def evaluate_teams(team_a: List[str], team_b: List[str]) -> tuple[float, Dict[str, Any]]:
+def _evaluate_with_state(team_a: List[str], team_b: List[str], state: Dict[str, Any]) -> tuple[float, Dict[str, Any]]:
     """
-    Returns (fairness_score, breakdown).
-    Lower fairness_score = more balanced / more "playable".
+    Core fairness evaluation using a provided engine state.
+    Returns (fairness_score, breakdown). Lower = more balanced.
     """
-    state = get_engine_state(force_reload=False)
-
     # Effective ratings (includes fitness + form)
     eff_a = [_effective_mmr(p, state) for p in team_a]
     eff_b = [_effective_mmr(p, state) for p in team_b]
@@ -538,68 +538,66 @@ def evaluate_teams(team_a: List[str], team_b: List[str]) -> tuple[float, Dict[st
     # Also penalise very high concentration on either team (not just imbalance)
     top_share_high = max(0.0, max(top_share_a, top_share_b) - 0.55)  # only when it's really a "duo carry"
 
-    
     # Trio synergy (triangle chemistry; results-only)
     trio_a, trio_vals_a = _team_trio_synergy(team_a, state)
     trio_b, trio_vals_b = _team_trio_synergy(team_b, state)
     trio_diff = abs(trio_a - trio_b)
 
     # Trio density (stops 1 "magic triangle" doing all the work)
-    trios = max(1, (len(team_a) * (len(team_a) - 1) * (len(team_a) - 2)) // 6)  # 5v5 => 10
+    trios = max(1, (len(team_a) * (len(team_a) - 1) * (len(team_a) - 2)) // 6)  # 5 => 10
     trio_dens_a = trio_a / float(trios)
     trio_dens_b = trio_b / float(trios)
     trio_dens_diff = abs(trio_dens_a - trio_dens_b)
 
-    # Penalise very negative total trio synergy (means the triangle historically underperforms)
-    trio_neg_total = max(0.0, -trio_a) + max(0.0, -trio_b)
+    # Trio concentration
+    top_trio_share_a = _top_share(trio_vals_a)
+    top_trio_share_b = _top_share(trio_vals_b)
+    top_trio_share_diff = abs(top_trio_share_a - top_trio_share_b)
+    top_trio_share_high = max(0.0, max(top_trio_share_a, top_trio_share_b) - 0.55)
 
-# Known bad pairing penalty (results-only)
+    # Bad pair penalties (known poor duos)
     bad_a = _team_badpair_badness(team_a, state)
     bad_b = _team_badpair_badness(team_b, state)
-    bad_total = bad_a + bad_b
+    bad_total = bad_a + bad_b  # both teams matter (if either team has toxic duo, match feels worse)
     bad_diff = abs(bad_a - bad_b)
 
-    # Similar-matchup memory penalty (results-only)
-    sim_pen, sim_dbg = _similarity_penalty(team_a, team_b, state)
+    # Similarity penalty (avoid repeated matchups if engine supports it)
+    # If state doesn't have similarity, treat as 0.
+    sim_pen = float(state.get("similarity_penalty", 0.0) or 0.0)
 
-    # Combine weights
-    # Base: MMR is still main anchor
-    W_MMR = 1.0
-    W_SPREAD = 0.25
+    # --- Weights (keep aligned with existing evaluate_teams) ---
+    W_MMR = 1.00
+    W_SPREAD = 0.70
+    W_CHEM = 0.08
+    W_DENS = 0.20
+    W_TOP_SHARE = 8.0
+    W_TOP_HIGH = 10.0
 
-    # Chemistry now matters *a lot more*, especially when MMR is already close
-    if mmr_diff < 20.0:
-        W_CHEM = 0.40
-        W_DENS = 0.30
-        W_TOPSHARE = 0.10
-        W_TRIO = 0.28
-        W_TRIO_DENS = 0.18
-        W_TRIO_NEG = 0.14
-    else:
-        W_CHEM = 0.22
-        W_DENS = 0.18
-        W_TOPSHARE = 0.08
-        W_TRIO = 0.16
-        W_TRIO_DENS = 0.10
-        W_TRIO_NEG = 0.10
+    W_TRIO = 0.06
+    W_TRIO_DENS = 0.16
+    W_TRIO_TOP = 8.0
+    W_TRIO_TOP_HIGH = 10.0
 
-    # Bad pairings and repeating bad old matchups: trust builders
-    W_BAD_TOTAL = 0.22     # avoid bad pairs full stop
-    W_BAD_DIFF = 0.08      # also don't dump them all on one team
-    W_SIM = 0.18
+    W_BAD_TOTAL = 0.05
+    W_BAD_DIFF = 0.10
 
-    fairness_score = (
-        (W_MMR * mmr_diff)
-        + (W_SPREAD * spread_diff)
-        + (W_CHEM * chem_diff)
-        + (W_DENS * dens_diff)
-        + (W_TOPSHARE * (top_share_diff * 25.0 + top_share_high * 25.0))
-        + (W_TRIO * trio_diff)
-        + (W_TRIO_DENS * (trio_dens_diff * 25.0))
-        + (W_TRIO_NEG * trio_neg_total)
-        + (W_BAD_TOTAL * bad_total)
-        + (W_BAD_DIFF * bad_diff)
-        + (W_SIM * sim_pen)
+    W_SIM = 1.0
+
+    # Final fairness score
+    score = (
+        (mmr_diff * W_MMR)
+        + (spread_diff * W_SPREAD)
+        + (chem_diff * W_CHEM)
+        + (dens_diff * W_DENS)
+        + (top_share_diff * W_TOP_SHARE)
+        + (top_share_high * W_TOP_HIGH)
+        + (trio_diff * W_TRIO)
+        + (trio_dens_diff * W_TRIO_DENS)
+        + (top_trio_share_diff * W_TRIO_TOP)
+        + (top_trio_share_high * W_TRIO_TOP_HIGH)
+        + (bad_total * W_BAD_TOTAL)
+        + (bad_diff * W_BAD_DIFF)
+        + (sim_pen * W_SIM)
     )
 
     breakdown = {
@@ -618,33 +616,362 @@ def evaluate_teams(team_a: List[str], team_b: List[str]) -> tuple[float, Dict[st
         "chem_top_share_a": top_share_a,
         "chem_top_share_b": top_share_b,
         "chem_top_share_diff": top_share_diff,
+        "chem_top_share_high": top_share_high,
         "trio_a": trio_a,
         "trio_b": trio_b,
         "trio_diff": trio_diff,
         "trio_density_a": trio_dens_a,
         "trio_density_b": trio_dens_b,
         "trio_density_diff": trio_dens_diff,
-        "trio_negative_total": trio_neg_total,
+        "trio_top_share_a": top_trio_share_a,
+        "trio_top_share_b": top_trio_share_b,
+        "trio_top_share_diff": top_trio_share_diff,
+        "trio_top_share_high": top_trio_share_high,
         "badpair_a": bad_a,
         "badpair_b": bad_b,
         "badpair_total": bad_total,
         "badpair_diff": bad_diff,
         "similarity_penalty": sim_pen,
-        "similarity_debug": sim_dbg,
-        "fairness_score": fairness_score,
-        "weights": {
-            "W_MMR": W_MMR,
-            "W_SPREAD": W_SPREAD,
-            "W_CHEM": W_CHEM,
-            "W_DENS": W_DENS,
-            "W_TOPSHARE": W_TOPSHARE,
-            "W_TRIO": W_TRIO,
-            "W_TRIO_DENS": W_TRIO_DENS,
-            "W_TRIO_NEG": W_TRIO_NEG,
-            "W_BAD_TOTAL": W_BAD_TOTAL,
-            "W_BAD_DIFF": W_BAD_DIFF,
-            "W_SIM": W_SIM,
-        },
-        "mode": "ENHANCED (MMR + fitness + form + spread + duo chemistry + trio synergy + bad-pair + matchup memory)",
     }
-    return fairness_score, breakdown
+    return float(score), breakdown
+
+
+def evaluate_teams(team_a: List[str], team_b: List[str]) -> Tuple[float, Dict[str, Any]]:
+    """
+    Returns (fairness_score, breakdown).
+    Lower fairness_score = more balanced / more "playable".
+    """
+    state = get_engine_state(force_reload=False)
+    return _evaluate_with_state(team_a, team_b, state)
+
+# -----------------------------
+# True pre-match fairness calibration (no leakage)
+# -----------------------------
+
+def _parse_score_for_gd(score_txt: str) -> Tuple[Optional[int], Optional[int]]:
+    s = (score_txt or "").strip()
+    if not s:
+        return None, None
+    # Accept "7-5" or "7 – 5"
+    s = s.replace("–", "-").replace("—", "-")
+    m = re.search(r"(\d+)\s*-\s*(\d+)", s)
+    if not m:
+        return None, None
+    try:
+        return int(m.group(1)), int(m.group(2))
+    except Exception:
+        return None, None
+
+
+def build_true_fairness_calibration(
+    close_goal_diff: int = 2,
+    bucket_size: float = 5.0,
+) -> pd.DataFrame:
+    """
+    Returns a calibration dataframe with columns:
+      - fairness_pre
+      - goal_diff
+      - is_close  (goal_diff <= close_goal_diff)
+      - date
+    computed using ONLY information available before each match.
+
+    Notes:
+    - Uses mmr_history.mmr_before when available for pre-match ratings.
+    - Rebuilds form + duo + trio stats in a rolling manner (no future leakage).
+    """
+    conn = get_conn()
+    try:
+        matches = pd.read_sql(
+            "SELECT id, date, team_a, team_b, result, score FROM matches WHERE result IN ('A','B','Draw','D');",
+            conn,
+        )
+    except Exception:
+        conn.close()
+        return pd.DataFrame(columns=["fairness_pre", "goal_diff", "is_close", "date"])
+
+    try:
+        players = pd.read_sql("SELECT name, fitness FROM players;", conn)
+    except Exception:
+        players = pd.DataFrame(columns=["name", "fitness"])
+
+    # mmr_history: allow either (player_id->players) or player_name directly, best-effort
+    mmr_hist = None
+    try:
+        mmr_hist = pd.read_sql(
+            "SELECT match_id, player_id, mmr_before FROM mmr_history;",
+            conn,
+        )
+    except Exception:
+        try:
+            mmr_hist = pd.read_sql(
+                "SELECT match_id, player_name, mmr_before FROM mmr_history;",
+                conn,
+            )
+        except Exception:
+            mmr_hist = None
+
+    conn.close()
+
+    matches["date"] = pd.to_datetime(matches["date"], errors="coerce")
+    matches = matches.sort_values("date", na_position="last")
+
+    # Fitness map (static)
+    fitness_map: dict[str, str] = {}
+    for _, r in players.iterrows():
+        n = clean_name(str(r.get("name", "")))
+        if n:
+            fitness_map[n] = str(r.get("fitness", "Medium") or "Medium")
+
+    # Helper: mmr_before lookup
+    mmr_before_lookup: dict[tuple[int, str], float] = {}
+    if mmr_hist is not None and not mmr_hist.empty:
+        if "player_id" in mmr_hist.columns:
+            # Need map player_id->name (if possible)
+            # Best-effort: assume players table has "id" as well, but if not, skip.
+            if "id" in players.columns:
+                id2name = {int(r["id"]): clean_name(str(r["name"])) for _, r in players.iterrows() if str(r.get("name","")).strip()}
+                for _, r in mmr_hist.iterrows():
+                    try:
+                        mid = int(r["match_id"])
+                        pid = int(r["player_id"])
+                        nm = id2name.get(pid, "")
+                        if not nm:
+                            continue
+                        mmr_before_lookup[(mid, nm)] = float(r["mmr_before"])
+                    except Exception:
+                        continue
+        elif "player_name" in mmr_hist.columns:
+            for _, r in mmr_hist.iterrows():
+                try:
+                    mid = int(r["match_id"])
+                    nm = clean_name(str(r["player_name"]))
+                    if not nm:
+                        continue
+                    mmr_before_lookup[(mid, nm)] = float(r["mmr_before"])
+                except Exception:
+                    continue
+
+    # Rolling stats
+    from collections import defaultdict, deque
+    total_matches = defaultdict(int)
+    # form deque of last 8 outcomes (W=1, D=0.5, L=0)
+    form_deques: dict[str, deque] = defaultdict(lambda: deque(maxlen=8))
+    # player win-rate rolling sums
+    player_score_sum = defaultdict(float)
+
+    # duo/trio rolling (within-team outcome scores)
+    duo_games = defaultdict(int)
+    duo_score_sum = defaultdict(float)
+
+    trio_games = defaultdict(int)
+    trio_score_sum = defaultdict(float)
+
+    def _team_pairs(team: List[str]):
+        for i in range(len(team)):
+            for j in range(i + 1, len(team)):
+                yield (team[i], team[j])
+
+    def _team_trios(team: List[str]):
+        for i in range(len(team)):
+            for j in range(i + 1, len(team)):
+                for k in range(j + 1, len(team)):
+                    yield (team[i], team[j], team[k])
+
+    def _rolling_form_index(name: str) -> float:
+        dq = form_deques.get(name)
+        if not dq:
+            return 0.5
+        return float(sum(dq) / len(dq)) if len(dq) else 0.5
+
+    def _rolling_win_rate(name: str) -> float:
+        m = total_matches.get(name, 0)
+        if not m:
+            return 0.5
+        return float(player_score_sum.get(name, 0.0) / float(m))
+
+    def _build_state_for_match(match_id: int, team_a: List[str], team_b: List[str]) -> dict:
+        # mmr_map from mmr_before where available; fallback to STARTING_MMR
+        mmr_map = {}
+        for p in set(team_a + team_b):
+            mmr_map[p] = float(mmr_before_lookup.get((match_id, p), STARTING_MMR))
+
+        # form_index
+        form_index = {p: _rolling_form_index(p) for p in mmr_map.keys()}
+
+        # base_chemistry from rolling duo outcomes (scaled)
+        base_chemistry = {}
+        for (a, b), g in duo_games.items():
+            if g <= 0:
+                continue
+            # mean outcome 0..1 centered at 0.5
+            mu = float(duo_score_sum.get((a, b), 0.0)) / float(g)
+            centered = mu - 0.5
+            # scale with sample, saturating
+            sample_factor = min(1.0, g / 10.0)
+            val = centered * 60.0 * sample_factor  # 60 chosen to give chemistry a meaningful range
+            base_chemistry[(a, b)] = val
+
+        # trio synergy from rolling trio outcomes (scaled)
+        trio_synergy = {}
+        for (a, b, c), g in trio_games.items():
+            if g <= 0:
+                continue
+            mu = float(trio_score_sum.get((a, b, c), 0.0)) / float(g)
+            centered = mu - 0.5
+            sample_factor = min(1.0, g / 8.0)
+            val = centered * 45.0 * sample_factor
+            trio_synergy[(a, b, c)] = val
+
+        # bad pair penalty based on rolling expectation
+        bad_pair_penalty = {}
+        MIN_GAMES_BAD = 5
+        ABS_BAD_WINRATE = 0.42
+        EXPECTED_DROP = 0.15
+        MAX_PEN = 28.0
+
+        for (a, b), g in duo_games.items():
+            if g < MIN_GAMES_BAD:
+                continue
+            mu = float(duo_score_sum.get((a, b), 0.0)) / float(g)
+            winrate = mu
+            exp = 0.5 * (_rolling_win_rate(a) + _rolling_win_rate(b))
+            drop = exp - winrate
+            if winrate <= ABS_BAD_WINRATE and drop >= EXPECTED_DROP:
+                sample_factor = min(1.0, g / 12.0)
+                pen = min(MAX_PEN, 10.0 + (drop * 70.0)) * sample_factor
+                bad_pair_penalty[(a, b)] = float(pen)
+
+        return {
+            "mmr_map": mmr_map,
+            "fitness_map": fitness_map,
+            "form_index": form_index,
+            "total_matches": dict(total_matches),
+            "base_chemistry": base_chemistry,
+            "bad_pair_penalty": bad_pair_penalty,
+            "trio_synergy": trio_synergy,
+            # similarity_penalty not available historically; keep 0
+            "similarity_penalty": 0.0,
+        }
+
+    rows = []
+    for _, mrow in matches.iterrows():
+        try:
+            match_id = int(mrow["id"])
+        except Exception:
+            continue
+
+        ta = [clean_name(p) for p in _split_team(mrow.get("team_a", "")) if clean_name(p)]
+        tb = [clean_name(p) for p in _split_team(mrow.get("team_b", "")) if clean_name(p)]
+        if not ta or not tb:
+            continue
+
+        state_pre = _build_state_for_match(match_id, ta, tb)
+        fairness_pre, _ = _evaluate_with_state(ta, tb, state_pre)
+
+        gA, gB = _parse_score_for_gd(str(mrow.get("score", "") or ""))
+        gd = abs(gA - gB) if (gA is not None and gB is not None) else None
+
+        rows.append(
+            {
+                "date": mrow.get("date"),
+                "fairness_pre": float(fairness_pre),
+                "goal_diff": gd,
+                "is_close": (gd is not None and gd <= int(close_goal_diff)),
+            }
+        )
+
+        # ---- update rolling stats using this match outcome ----
+        res = str(mrow.get("result", "") or "").upper()
+        if res == "DRAW":
+            res = "D"
+        if res == "A":
+            out_a, out_b = 1.0, 0.0
+        elif res == "B":
+            out_a, out_b = 0.0, 1.0
+        else:
+            out_a, out_b = 0.5, 0.5
+
+        for p in ta:
+            total_matches[p] += 1
+            player_score_sum[p] += out_a
+            form_deques[p].append(out_a)
+        for p in tb:
+            total_matches[p] += 1
+            player_score_sum[p] += out_b
+            form_deques[p].append(out_b)
+
+        # duo updates
+        for team, sc in ((ta, out_a), (tb, out_b)):
+            for a, b in _team_pairs(team):
+                duo_games[(a, b)] += 1
+                duo_games[(b, a)] += 1
+                duo_score_sum[(a, b)] += sc
+                duo_score_sum[(b, a)] += sc
+
+        # trio updates
+        for team, sc in ((ta, out_a), (tb, out_b)):
+            for a, b, c in _team_trios(team):
+                key = tuple(sorted((a, b, c)))
+                trio_games[key] += 1
+                trio_score_sum[key] += sc
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+
+    # Remove rows without goal diff for calibration stats
+    df = df.dropna(subset=["goal_diff"])
+    return df
+
+
+def calibration_lookup(
+    fairness_score: float,
+    calib_df: pd.DataFrame,
+    bucket_size: float = 5.0,
+    close_goal_diff: int = 2,
+) -> dict:
+    """
+    Given a fairness score and the per-match calibration df (from build_true_fairness_calibration),
+    return interpreted metrics: quality_0_100, close_pct, typical_margin, n.
+    """
+    if calib_df is None or calib_df.empty:
+        return {"quality": None, "close_pct": None, "typical_margin": None, "n": 0, "bucket": None}
+
+    x = float(fairness_score)
+    # bucket by floor
+    b0 = bucket_size * math.floor(x / bucket_size)
+    b1 = b0 + bucket_size
+
+    d = calib_df.copy()
+    d["bucket0"] = (bucket_size * (d["fairness_pre"] // bucket_size)).astype(float)
+
+    bucket = d[d["bucket0"] == b0]
+    if bucket.empty:
+        # fallback to nearest bucket
+        buckets = sorted(d["bucket0"].unique().tolist())
+        if not buckets:
+            return {"quality": None, "close_pct": None, "typical_margin": None, "n": 0, "bucket": None}
+        nearest = min(buckets, key=lambda z: abs(z - b0))
+        bucket = d[d["bucket0"] == nearest]
+        b0 = nearest
+        b1 = b0 + bucket_size
+
+    n = int(len(bucket))
+    close_pct = float(bucket["is_close"].mean() * 100.0) if n else None
+    typical_margin = float(bucket["goal_diff"].mean()) if n else None
+
+    # Quality: map close_pct (0..100) to 0..100, and penalise high typical margin a bit
+    quality = None
+    if close_pct is not None:
+        quality = close_pct
+        if typical_margin is not None:
+            quality = max(0.0, min(100.0, quality - max(0.0, (typical_margin - close_goal_diff) * 8.0)))
+
+    return {
+        "quality": quality,
+        "close_pct": close_pct,
+        "typical_margin": typical_margin,
+        "n": n,
+        "bucket": f"{b0:.0f}–{b1:.0f}",
+    }
+

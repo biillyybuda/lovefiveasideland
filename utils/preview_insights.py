@@ -204,7 +204,7 @@ def _get_recent_meetings(team_a, team_b, conn):
 # -------------------------------
 def _get_form_streaks(players, conn, recent_n=10):
     matches = pd.read_sql(
-        "SELECT date, team_a, team_b, result FROM matches WHERE processed=1;",
+        "SELECT date, team_a, team_b, score FROM matches WHERE processed=1;",
         conn
     )
     matches["date"] = pd.to_datetime(matches["date"], errors="coerce")
@@ -212,6 +212,15 @@ def _get_form_streaks(players, conn, recent_n=10):
 
     def split_names(s):
         return [p.strip() for p in str(s or "").split(",") if p.strip()]
+    
+    def _parse_score(score):
+        if not isinstance(score, str) or "-" not in score:
+            return None, None
+        try:
+            a, b = score.split("-")
+            return int(a.strip()), int(b.strip())
+        except Exception:
+            return None, None
 
     form_data = []
 
@@ -225,29 +234,23 @@ def _get_form_streaks(players, conn, recent_n=10):
 
             res = str(r.get("result", "")).strip().upper()
 
-            # normalise result marker
-            if res not in ["A", "B", "D"]:
-                if "TEAM A" in res:
-                    res = "A"
-                elif "TEAM B" in res:
-                    res = "B"
-                elif "DRAW" in res or res == "X":
-                    res = "D"
-                else:
-                    continue
+
+            gA, gB = _parse_score(r.get("score"))
+            if gA is None or gB is None:
+                continue
 
             if p_key in [clean_name(x) for x in ta]:
-                if res == "A":
+                if gA > gB:
                     results.append("W")
-                elif res == "B":
+                elif gA < gB:
                     results.append("L")
                 else:
                     results.append("D")
 
             elif p_key in [clean_name(x) for x in tb]:
-                if res == "B":
+                if gB > gA:
                     results.append("W")
-                elif res == "A":
+                elif gB < gA:
                     results.append("L")
                 else:
                     results.append("D")
@@ -263,23 +266,21 @@ def _get_form_streaks(players, conn, recent_n=10):
             draws = recent_results.count("D")
 
             # ---- STREAK LOGIC (draw breaks streak) ----
-            win_streak = lose_streak = 0
-            for r in reversed(recent_results):
-                if r == "W":
-                    win_streak += 1
-                    lose_streak = 0
-                elif r == "L":
-                    lose_streak += 1
-                    win_streak = 0
-                else:  # DRAW
-                    break
+            last = recent_results[-1]
 
-            if win_streak > 0:
-                form = f"Won {win_streak} straight"
-            elif lose_streak > 0:
-                form = f"Lost {lose_streak} straight"
+            if last == "D":
+                form = "No streak"  # draw breaks streaks
             else:
-                form = "No streak"
+                streak = 1
+                for rr in reversed(recent_results[:-1]):
+                    if rr != last:
+                        break
+                    streak += 1
+
+                if last == "W":
+                    form = f"Won {streak} straight"
+                else:  # last == "L"
+                    form = f"Lost {streak} straight"
 
         form_data.append({
             "Player": p,

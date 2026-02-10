@@ -1,3 +1,20 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+
+from utils.team_ai_engine import (
+    evaluate_teams,
+    build_true_fairness_calibration,
+    calibration_lookup,
+)
+
+# now decorators are safe
+@st.cache_data(ttl=60*60*6, show_spinner=False)
+def _get_true_fairness_calib_cached():
+    try:
+        return build_true_fairness_calibration(close_goal_diff=2, bucket_size=5.0)
+    except Exception:
+        return pd.DataFrame(columns=["fairness_pre", "goal_diff", "is_close", "date"])
 
 import streamlit as st
 import pandas as pd
@@ -298,12 +315,15 @@ def _render_previous_meetings_block(team_a: list[str], team_b: list[str], matche
     score_txt = str(m.get("scoreline") or "").strip()
     meta_txt = " · ".join([t for t in [date_txt] if t])
 
-    # Try to split score for big display
+    # Try to split score for big display (respect swapped orientation)
     gA, gB = _parse_score(score_txt)
     if gA is None or gB is None:
         big_score = score_txt if score_txt else "—"
     else:
-        big_score = f"{gA}–{gB}"
+        if str(m.get("orientation")) == "swapped":
+            big_score = f"{gB}–{gA}"
+        else:
+            big_score = f"{gA}–{gB}"
 
     # Build pills for lineups, highlighting players NOT involved today (red)
     todayA = {clean_name(x) for x in team_a}
@@ -742,6 +762,52 @@ def _recent_form_boxes_html(player_name: str, matches_eng: pd.DataFrame) -> str:
             f"<span style='display:inline-block;width:14px;height:14px;border-radius:3px;background:{color};margin-right:4px;'></span>"
         )
     return f"<div style='display:flex;align-items:center;margin-top:2px;'>{''.join(boxes)}</div>"
+
+def _current_streak_scorebased(player_name: str, matches_eng: pd.DataFrame) -> tuple[str | None, int]:
+    """
+    Return ('W'/'L', n) for current streak based on score, or (None, 0) if none/insufficient.
+    Draw breaks streaks.
+    """
+    if matches_eng is None or matches_eng.empty:
+        return (None, 0)
+
+    key = clean_name(player_name)
+    df = matches_eng.copy()
+    df["date"] = pd.to_datetime(df.get("date"), errors="coerce")  # type: ignore
+    df = df.sort_values("date")
+
+    results = []
+    for _, row in df.iterrows():
+        ta = [clean_name(p) for p in _parse_team_list(row.get("team_a", ""))]
+        tb = [clean_name(p) for p in _parse_team_list(row.get("team_b", ""))]
+        if key not in ta and key not in tb:
+            continue
+
+        gA, gB = _parse_score(row.get("score", ""))
+        if gA is None or gB is None:
+            continue
+
+        if key in ta:
+            results.append("W" if gA > gB else ("L" if gA < gB else "D"))
+        else:
+            results.append("W" if gB > gA else ("L" if gB < gA else "D"))
+
+    if not results:
+        return (None, 0)
+
+    last = results[-1]
+    if last == "D":
+        return (None, 0)
+
+    streak = 1
+    for rr in reversed(results[:-1]):
+        if rr != last:
+            break
+        streak += 1
+
+    return (last, streak)
+
+
 
 def _pstats_from_players_df(players_df: pd.DataFrame, name: str) -> dict:
     row = players_df[players_df["name"] == name]
@@ -1313,10 +1379,11 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
                     mmr_txt = str(ps.get("mmr"))
 
             streak_txt = ""
-            if ps["win_streak"] >= 2:
-                streak_txt = f"🟢 W{ps['win_streak']}"
-            elif ps["lose_streak"] >= 2:
-                streak_txt = f"🔴 L{ps['lose_streak']}"
+            st, n = _current_streak_scorebased(name, matches_eng) if matches_eng is not None else (None, 0)
+            if st == "W" and n >= 2:
+                streak_txt = f"🟢 W{n}"
+            elif st == "L" and n >= 2:
+                streak_txt = f"🔴 L{n}"
 
             return f"""
     <div style="background:linear-gradient(135deg, {bg} 0%, rgba(0,0,0,0) 70%);border:1px solid rgba(255,255,255,0.10);padding:14px 16px;border-radius:16px;margin-bottom:12px;box-shadow:0 0 12px rgba(0,0,0,0.65);">
@@ -1561,7 +1628,7 @@ def render_team_generator_page(show_header: bool = True):
         # Clean matchup card (no repeated sub-headers)
         boxA = f"""
         <div style='background:{palA["bg"]};border:1px solid {palA["fg"]}40;border-radius:12px;padding:10px 12px;'>
-        <div style="font-weight:800;margin-bottom:6px;">Avg MMR {a_eff:.0f}</div>
+        <div style="font-weight:800;margin-bottom:6px;">Avg MMR (Form-Adjusted) {a_eff:.0f}</div>
         <div style="line-height:1.7;">
             {'<br>'.join(_name_ui(p, players_df) for p in disp_A)}
         </div>
@@ -1570,7 +1637,7 @@ def render_team_generator_page(show_header: bool = True):
 
         boxB = f"""
         <div style='background:{palB["bg"]};border:1px solid {palB["fg"]}40;border-radius:12px;padding:10px 12px;text-align:right;'>
-        <div style="font-weight:800;margin-bottom:6px;">Avg MMR {b_eff:.0f}</div>
+        <div style="font-weight:800;margin-bottom:6px;">Avg MMR (Form-Adjusted) {b_eff:.0f}</div>
         <div style="line-height:1.7;">
             {'<br>'.join(_name_ui(p, players_df) for p in disp_B)}
         </div>
@@ -1582,7 +1649,49 @@ def render_team_generator_page(show_header: bool = True):
         with cR:
             st.markdown(boxB, unsafe_allow_html=True)
 
-        st.caption(f"Fairness Score: {score:.2f} (lower = more balanced)")
+        calib_df = _get_true_fairness_calib_cached()
+        interp = calibration_lookup(float(score), calib_df, bucket_size=5.0, close_goal_diff=2)
+
+        q = interp.get("quality", None)
+        close_pct = interp.get("close_pct", None)
+        typical = interp.get("typical_margin", None)
+        n = interp.get("n", 0)
+        bucket = interp.get("bucket", None)
+
+        # Headline: Matchup Quality (0–100)
+        if q is None:
+            st.caption(f"Fairness Score: {score:.2f} (lower = more balanced)")
+        else:
+            # --- Matchup Quality Panel ---
+            c1, c2, c3, c4 = st.columns(4)
+
+            c1.metric("Matchup Quality", f"{q:.0f}/100")
+
+            c2.metric(
+                "Chance of close game",
+                f"{close_pct:.0f}%"
+            )
+
+            c3.metric(
+                "Expected margin",
+                f"{typical:.1f} goals"
+            )
+
+            # Confidence wording for sample size
+            if n >= 40:
+                conf = "high confidence"
+            elif n >= 20:
+                conf = "medium confidence"
+            elif n >= 10:
+                conf = "low confidence"
+            else:
+                conf = "very low confidence"
+
+            c4.metric(
+                "Historical sample size",
+                f"{n}",
+                help=f"{n} similar past matches · {conf}"
+            )
 
         use_key = f"use_matchup_{i}"
         if st.button("✅ Use this matchup for Matchday Card", key=use_key):
@@ -1592,6 +1701,13 @@ def render_team_generator_page(show_header: bool = True):
             st.session_state.mdk_expanded = True
             st.rerun()
         with st.expander("🔍 Fairness Breakdown"):
+            st.markdown(
+                f"""
+            **Overall fairness score:** `{score:.2f}`  
+            **Comparison range:** `{bucket or "—"}`
+            """
+            )
+
             st.write("**MMR & Form (effective rating)**")
             st.markdown(
                 f"- Team A effective rating: `{float(breakdown.get('mmr_avg_a', 0)):.1f}`  \n"
