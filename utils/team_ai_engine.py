@@ -50,12 +50,12 @@ def _load_db_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load matches and players from DB (BASIC MODE: results-only)."""
     conn = get_conn()
     matches = pd.read_sql(
-        "SELECT * FROM matches WHERE result IN ('A','B','Draw');",
+        "SELECT id, date, team_a, team_b, result, score FROM matches WHERE result IN ('A','B','Draw');",
         conn
     )
 
     try:
-        players = pd.read_sql("SELECT * FROM players;", conn)
+        players = pd.read_sql("SELECT id, name, mmr, fitness FROM players;", conn)
     except Exception:
         players = pd.DataFrame(columns=["id", "name", "mmr", "fitness"])
 
@@ -320,7 +320,12 @@ def _build_engine_state() -> Dict[str, Any]:
     }
 
 
-def get_engine_state(force_reload: bool = True) -> Dict[str, Any]:
+def clear_engine_cache() -> None:
+    """Clear the in-memory AI engine cache after matches/players are changed."""
+    global _ENGINE_CACHE
+    _ENGINE_CACHE = None
+
+def get_engine_state(force_reload: bool = False) -> Dict[str, Any]:
     """Engine state (MMR + fitness + form + chemistry + duo penalties)."""
     global _ENGINE_CACHE
     if _ENGINE_CACHE is None or force_reload:
@@ -561,9 +566,8 @@ def _evaluate_with_state(team_a: List[str], team_b: List[str], state: Dict[str, 
     bad_total = bad_a + bad_b  # both teams matter (if either team has toxic duo, match feels worse)
     bad_diff = abs(bad_a - bad_b)
 
-    # Similarity penalty (avoid repeated matchups if engine supports it)
-    # If state doesn't have similarity, treat as 0.
-    sim_pen = float(state.get("similarity_penalty", 0.0) or 0.0)
+    # Similarity penalty (avoid repeating very similar one-sided matchups)
+    sim_pen, sim_debug = _similarity_penalty(team_a, team_b, state)
 
     # --- Weights (keep aligned with existing evaluate_teams) ---
     W_MMR = 1.00
@@ -632,6 +636,8 @@ def _evaluate_with_state(team_a: List[str], team_b: List[str], state: Dict[str, 
         "badpair_total": bad_total,
         "badpair_diff": bad_diff,
         "similarity_penalty": sim_pen,
+        "similarity_debug": sim_debug,
+        "fairness_score": float(score),
     }
     return float(score), breakdown
 

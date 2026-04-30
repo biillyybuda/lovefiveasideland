@@ -3,12 +3,14 @@ from io import BytesIO
 import matplotlib.pyplot as plt
 from PIL import Image, ImageDraw, ImageFont
 import pandas as pd
+import streamlit as st
 import textwrap
 from datetime import datetime
 
 def safe_bytes(data):
     return data.getvalue() if hasattr(data, "getvalue") else data
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def df_to_png(df, title=None, width=1000, header=True, col_widths=None):
     dpi = 120
     row_count = max(1, len(df))

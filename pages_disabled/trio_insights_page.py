@@ -3,6 +3,7 @@ import pandas as pd
 import itertools
 import math
 from utils.calc_utils import get_conn
+from utils.db_utils import load_matches_df
 from utils.relationships_utils import _score_to_ints
 
 st.set_page_config(page_title="🔺 Trio Insights", layout="wide")
@@ -10,8 +11,9 @@ st.set_page_config(page_title="🔺 Trio Insights", layout="wide")
 def render_trio_insights_page():
     st.title("🔺 Trio Insights — Experimental View")
 
-    conn = get_conn()
-    matches_df = pd.read_sql("SELECT * FROM matches WHERE processed=1;", conn)
+    matches_df = load_matches_df()
+    if "processed" in matches_df.columns:
+        matches_df = matches_df[matches_df["processed"].fillna(0).astype(int) == 1].copy()
 
     if matches_df.empty:
         st.warning("No processed matches found.")

@@ -189,6 +189,18 @@ st.sidebar.selectbox(
 )
 st.sidebar.markdown("---")
 
+# Manual cache refresh (useful after edits or if Render/Supabase feels stale)
+if st.sidebar.button("🔄 Refresh Data", use_container_width=True):
+    try:
+        from utils.cache_utils import invalidate_app_caches
+        invalidate_app_caches()
+    except Exception:
+        st.cache_data.clear()
+    st.sidebar.success("Data refreshed")
+    st.rerun()
+
+st.sidebar.markdown("---")
+
 # Logout (bottom-ish)
 logout_ui()
 st.sidebar.markdown("---")

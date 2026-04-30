@@ -6,7 +6,7 @@ from collections import defaultdict
 from utils.mmr_utils import get_season_mmr, get_current_season_start
 
 
-from utils.db_utils import get_conn, get_current_league_id, sql_df
+from utils.db_utils import get_conn, get_current_league_id, sql_df, load_matches_df
 from utils.export_utils import df_to_png, fig_to_png_bytes  # kept for compatibility (may be used elsewhere)
 from utils.stats_shared import (
     get_chemistry_df,
@@ -911,7 +911,7 @@ def render_player_insights(suffix="", season_mode=None, selected_year=None, seas
     conn = get_conn()
     try:
         players = pd.read_sql("SELECT id, name FROM players WHERE league_id = %s ORDER BY name", conn, params=(get_current_league_id(),))
-        matches = matches.copy() if matches is not None else pd.read_sql("SELECT * FROM matches WHERE processed=1 AND league_id = %s", conn, params=(get_current_league_id(),))
+        matches = matches.copy() if matches is not None else load_matches_df().query("processed == 1").copy()
         league_id = get_current_league_id()
         mmr_hist = load_mmr_history_full_cached(league_id)
 
@@ -1004,11 +1004,28 @@ def render_player_insights(suffix="", season_mode=None, selected_year=None, seas
         else:
             c3.metric("Current MMR", f"{current_mmr:.0f}", f"{net_mmr_change:+.0f} vs start")
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Wins", int(win_count))
-        c2.metric("Losses/Draws", int(total_matches - win_count))
-        c3.metric("Avg MMR Δ / Match", f"{avg_mmr_delta:+.2f}" if not df_p.empty else "—")
+        # --- Calculate draws & losses ---
+        draw_count = 0
+        loss_count = 0
 
+        for _, m in player_matches.iterrows():
+            ta = _split_team(m.get("team_a", ""))
+            tb = _split_team(m.get("team_b", ""))
+            res = str(m.get("result", "")).strip().upper()
+
+            if res == "DRAW":
+                draw_count += 1
+            elif (sel_player in ta and res == "A") or (sel_player in tb and res == "B"):
+                pass  # already counted as win
+            else:
+                loss_count += 1
+
+        # --- Display ---
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Wins", int(win_count))
+        c2.metric("Draws", int(draw_count))
+        c3.metric("Losses", int(loss_count))
+        c4.metric("Avg MMR Δ / Match", f"{avg_mmr_delta:+.2f}" if not df_p.empty else "—")
         # --------------------------
         # 📈 MMR Over Time
         # --------------------------
@@ -1209,7 +1226,7 @@ def render_head_to_head_section(season_mode=None, selected_year=None, season_sta
         if matches is not None:
             matches_df = matches.copy()
         else:
-            matches_df = pd.read_sql("SELECT * FROM matches WHERE processed=1 AND league_id = %s", conn, params=(get_current_league_id(),))
+            matches_df = load_matches_df().query("processed == 1").copy()
 
         # Safety: ensure dataframe exists
         if matches_df is None:

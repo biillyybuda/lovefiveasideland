@@ -1,4 +1,5 @@
 import pandas as pd
+import streamlit as st
 import numpy as np
 import re
 from utils.relationships_utils import calculate_chemistry_for_all_duos, calculate_rivalry_intensity
@@ -44,11 +45,12 @@ def _norm_col(df: pd.DataFrame, candidates: list[str], out_col: str):
 # -------------------------------
 # 1️⃣  Key Matchups  (now using relationships_utils)
 # -------------------------------
-def _get_key_matchups(team_a, team_b, conn):
+def _get_key_matchups(team_a, team_b, conn=None, matches_df=None):
     """Generate rivalry insight table using shared depth-weighted logic."""
     team_a_n = _norm_list(team_a)
     team_b_n = _norm_list(team_b)
-    matches_df = pd.read_sql("SELECT * FROM matches WHERE processed=1;", conn)
+    if matches_df is None:
+        matches_df = _processed_matches_cached()
 
     df_rivals_all = calculate_rivalry_intensity(matches_df)
 
@@ -84,11 +86,12 @@ def _get_key_matchups(team_a, team_b, conn):
 # -------------------------------
 # 2️⃣  Best Teammates  (now using relationships_utils)
 # -------------------------------
-def _get_best_teammates(team_a, team_b, conn):
+def _get_best_teammates(team_a, team_b, conn=None, matches_df=None):
     """Generate teammate chemistry tables using shared depth-weighted logic."""
     team_a_n = _norm_list(team_a)
     team_b_n = _norm_list(team_b)
-    matches_df = pd.read_sql("SELECT * FROM matches WHERE processed=1;", conn)
+    if matches_df is None:
+        matches_df = _processed_matches_cached()
     df_chem_all = calculate_chemistry_for_all_duos(matches_df)
 
     # Normalise player keys for matching
@@ -135,11 +138,10 @@ def _get_best_teammates(team_a, team_b, conn):
 # -------------------------------
 # 3️⃣  Scores to Settle (Recent Meetings)
 # -------------------------------
-def _get_recent_meetings(team_a, team_b, conn):
-    all_matches = pd.read_sql(
-        "SELECT date, team_a, team_b, result, score FROM matches WHERE processed=1 ORDER BY date DESC;",
-        conn
-    )
+def _get_recent_meetings(team_a, team_b, conn=None, matches_df=None):
+    all_matches = matches_df.copy() if matches_df is not None else _processed_matches_cached().copy()
+    if "date" in all_matches.columns:
+        all_matches = all_matches.sort_values("date", ascending=False)
 
     def split_names(s):
         return [p.strip() for p in str(s or "").split(",") if p.strip()]
@@ -202,11 +204,8 @@ def _get_recent_meetings(team_a, team_b, conn):
 # -------------------------------
 # 4️⃣  Form & Streaks (WITH DRAWS)
 # -------------------------------
-def _get_form_streaks(players, conn, recent_n=10):
-    matches = pd.read_sql(
-        "SELECT date, team_a, team_b, score FROM matches WHERE processed=1;",
-        conn
-    )
+def _get_form_streaks(players, conn=None, recent_n=10, matches_df=None):
+    matches = matches_df.copy() if matches_df is not None else _processed_matches_cached().copy()
     matches["date"] = pd.to_datetime(matches["date"], errors="coerce")
     matches = matches.sort_values("date", ascending=True).dropna(subset=["date"])
 
@@ -305,20 +304,30 @@ from utils.db_utils import get_conn as open_db
 from utils.calc_utils import expected_score
 from utils.stats_shared import get_chemistry_df, get_intensity_df
 
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _processed_matches_cached() -> pd.DataFrame:
+    """One cached read for match-preview insight calculations."""
+    conn = open_db()
+    try:
+        return pd.read_sql("SELECT date, team_a, team_b, result, score FROM matches WHERE processed=1;", conn)
+    finally:
+        conn.close()
+
 def predict_match_outcome(team_a, team_b, conn):
     """
     Blend MMR, chemistry and historical matchups to generate a match prediction.
     Returns a dict with probA, probB and text.
     """
     players_df = pd.read_sql("SELECT name, mmr FROM players", conn)
-    matches = pd.read_sql("SELECT * FROM matches WHERE processed=1;", conn)
+    matches = _processed_matches_cached()
 
     # --- Base MMR averages
     avgA = players_df[players_df["name"].isin(team_a)]["mmr"].mean()
     avgB = players_df[players_df["name"].isin(team_b)]["mmr"].mean()
 
     # --- Chemistry weighting
-    chem_df = get_chemistry_df()
+    chem_df = get_chemistry_df(matches_df=matches)
 
     def avg_team_chem(team):
         # Normalize columns to handle naming differences
@@ -393,10 +402,12 @@ def generate_preview_insights(team_a, team_b, conn):
     team_b = [p.strip() for p in team_b if p.strip()]
     all_players = team_a + team_b
 
+    matches_df = _processed_matches_cached()
+
     insights = {
-        "key_matchups": _get_key_matchups(team_a, team_b, conn),
-    "best_teammates": _get_best_teammates(team_a, team_b, conn),
-        "recent_meetings": _get_recent_meetings(team_a, team_b, conn),
-        "form_streaks": _get_form_streaks(all_players, conn),
+        "key_matchups": _get_key_matchups(team_a, team_b, conn, matches_df=matches_df),
+        "best_teammates": _get_best_teammates(team_a, team_b, conn, matches_df=matches_df),
+        "recent_meetings": _get_recent_meetings(team_a, team_b, conn, matches_df=matches_df),
+        "form_streaks": _get_form_streaks(all_players, conn, matches_df=matches_df),
     }
     return insights

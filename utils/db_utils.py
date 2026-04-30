@@ -31,24 +31,19 @@ def get_current_league_id() -> int:
 # -----------------------------
 # Postgres / Supabase connection
 # -----------------------------
-# Set these in CMD before running Streamlit:
-#   set PGHOST=db.pxtiginazcpwyquvquji.supabase.co
-#   set PGDATABASE=postgres
-#   set PGUSER=postgres
-#   set PGPASSWORD=your_password
-#   set PGPORT=5432
-#
-# (We use separate fields so % in password is fine.)
-def get_conn():
-    # 1️⃣ Preferred: single connection string (Render / Supabase)
+# This app opens DB connections from lots of pages. On Render/Supabase, creating a
+# new SSL connection for every rerun is slow, so get_conn() now returns a pooled
+# connection wrapper. Existing code can still call conn.close(); close() returns
+# the connection to the pool instead of really closing it.
+
+def _connect_raw():
+    """Create a real psycopg2 connection. Used only as a fallback/debug path."""
     db_url = os.getenv("DATABASE_URL")
     if db_url:
         return psycopg2.connect(db_url, sslmode="require")
 
-    # 2️⃣ Fallback: discrete PG* vars (local / legacy)
     host = os.getenv("PGHOST", "").strip()
     password = os.getenv("PGPASSWORD", "")
-
     if not host or not password:
         raise RuntimeError(
             "Postgres env vars not set. Set DATABASE_URL (recommended) "
@@ -73,7 +68,7 @@ def _get_pool():
     """Create a small Postgres connection pool per Streamlit process."""
     db_url = os.getenv("DATABASE_URL")
     if db_url:
-        return SimpleConnectionPool(1, 5, dsn=db_url, sslmode="require")
+        return SimpleConnectionPool(1, 8, dsn=db_url, sslmode="require")
 
     host = os.getenv("PGHOST", "").strip()
     password = os.getenv("PGPASSWORD", "")
@@ -85,7 +80,7 @@ def _get_pool():
 
     return SimpleConnectionPool(
         1,
-        5,
+        8,
         host=host,
         dbname=os.getenv("PGDATABASE", "postgres"),
         user=os.getenv("PGUSER", "postgres"),
@@ -95,16 +90,66 @@ def _get_pool():
     )
 
 
+class PooledConnection:
+    """Small DB-API wrapper that makes existing conn.close() code pool-safe."""
+
+    def __init__(self, pool, conn):
+        self._pool = pool
+        self._conn = conn
+        self._returned = False
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is not None:
+            try:
+                self._conn.rollback()
+            except Exception:
+                pass
+        self.close()
+        return False
+
+    def close(self):
+        """Return the underlying connection to the pool once."""
+        if self._returned:
+            return
+        self._returned = True
+        try:
+            if getattr(self._conn, "closed", 1) == 0:
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
+                self._pool.putconn(self._conn)
+        except Exception:
+            try:
+                self._pool.putconn(self._conn, close=True)
+            except Exception:
+                pass
+
+
+def get_conn():
+    """Return a pooled Postgres connection. Call .close() when finished."""
+    if str(os.getenv("LOVEFIVE_DISABLE_DB_POOL", "")).lower() in ("1", "true", "yes"):
+        return _connect_raw()
+
+    pool = _get_pool()
+    return PooledConnection(pool, pool.getconn())
+
+
 from contextlib import contextmanager
 
 @contextmanager
 def pooled_conn():
-    pool = _get_pool()
-    conn = pool.getconn()
+    conn = get_conn()
     try:
         yield conn
     finally:
-        pool.putconn(conn)
+        conn.close()
 
 # -----------------------------
 # Generic cached query helper

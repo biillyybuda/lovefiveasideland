@@ -1,4 +1,5 @@
 import streamlit as st
+from utils.cache_utils import invalidate_app_caches
 import pandas as pd
 from datetime import datetime
 from utils.db_utils import load_players_df, load_matches_df, get_conn, backup_db_manual, STARTING_MMR
@@ -109,7 +110,7 @@ def render_matches_page():
             try:
                 load_matches_df.clear()
             except Exception:
-                st.cache_data.clear()
+                invalidate_app_caches()
 
             st.success('Match added (draft).')
             st.rerun()
@@ -206,7 +207,7 @@ def render_matches_page():
                         try:
                             load_matches_df.clear()
                         except Exception:
-                            st.cache_data.clear()
+                            invalidate_app_caches()
 
                         st.success('Match updated')
                         st.rerun()
@@ -220,7 +221,7 @@ def render_matches_page():
                     try:
                         load_matches_df.clear()
                     except Exception:
-                        st.cache_data.clear()
+                        invalidate_app_caches()
 
                     st.success('Match deleted')
                     st.rerun()
@@ -253,7 +254,7 @@ def render_matches_page():
                 try:
                     load_matches_df.clear()
                 except Exception:
-                    st.cache_data.clear()
+                    invalidate_app_caches()
 
                 if cnt > 0:
                     st.success(f"Processed {cnt} match(es).")
@@ -273,7 +274,7 @@ def render_matches_page():
                 try:
                     load_matches_df.clear()
                 except Exception:
-                    st.cache_data.clear()
+                    invalidate_app_caches()
 
                 st.success(f"Full rebuild complete. Processed {cnt} match(es) from 1000.")
                 st.rerun()

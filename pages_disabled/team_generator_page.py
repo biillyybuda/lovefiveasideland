@@ -29,7 +29,7 @@ from utils.betting_markets import build_markets, blended_expected_goals
 
 
 
-from utils.db_utils import load_players_df, get_conn as open_db
+from utils.db_utils import load_players_df, load_matches_df, get_conn as open_db
 from utils.team_ai_engine import evaluate_teams, get_engine_state, clean_name
 from utils.calc_utils import calibrate_winprob_scale, expected_score_calibrated
 from utils.preview_insights import generate_preview_insights
@@ -37,11 +37,7 @@ from utils.ui_components import page_header
 
 @st.cache_data(ttl=300)
 def _players_table_cached():
-    conn = open_db()
-    try:
-        return pd.read_sql("SELECT * FROM players", conn)
-    finally:
-        conn.close()
+    return load_players_df()
 
 def _name_ui(name: str, players_df: pd.DataFrame) -> str:
     """Return DB display_name if present, else fall back to _display_name()."""
@@ -74,6 +70,78 @@ def _format_1dp(styler, df: pd.DataFrame):
     except Exception:
         pass
     return styler
+
+
+def _lineup_signature(team_a: list[str], team_b: list[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    a = tuple(sorted(clean_name(x) for x in team_a if str(x).strip()))
+    b = tuple(sorted(clean_name(x) for x in team_b if str(x).strip()))
+    return a, b
+
+
+def _confidence_label(n: int) -> str:
+    if n >= 40:
+        return "high confidence"
+    if n >= 20:
+        return "medium confidence"
+    if n >= 10:
+        return "low confidence"
+    return "very low confidence"
+
+
+def _recommendation_score(score: float, interp: dict) -> float:
+    q = float(interp.get("quality") or 0.0)
+    close_pct = float(interp.get("close_pct") or 0.0)
+    typical = float(interp.get("typical_margin") or 9.9)
+    n = float(interp.get("n") or 0.0)
+    confidence_bonus = min(10.0, math.log1p(max(0.0, n)) * 3.0)
+    fairness_bonus = max(0.0, 15.0 - min(float(score), 15.0))
+    return q + (close_pct * 0.18) + confidence_bonus + fairness_bonus - (typical * 7.5)
+
+
+def _matchup_reason(breakdown: dict, interp: dict) -> str:
+    mmr_diff = float(breakdown.get("mmr_diff", 0.0) or 0.0)
+    spread_diff = float(breakdown.get("spread_diff", 0.0) or 0.0)
+    chem_diff = float(breakdown.get("chem_diff", 0.0) or 0.0)
+    trio_diff = float(breakdown.get("trio_diff", 0.0) or 0.0)
+    bad_total = float(breakdown.get("badpair_total", 0.0) or 0.0)
+    sim_pen = float(breakdown.get("similarity_penalty", 0.0) or 0.0)
+    close_pct = float(interp.get("close_pct") or 0.0)
+    n = int(interp.get("n") or 0)
+
+    parts = []
+    if mmr_diff <= 1.5:
+        parts.append("very even on effective MMR")
+    elif mmr_diff <= 4.0:
+        parts.append("close on effective MMR")
+    else:
+        parts.append("slightly wider MMR gap")
+
+    if spread_diff <= 1.5:
+        parts.append("good player-spread balance")
+    elif spread_diff >= 4.5:
+        parts.append("more uneven team shape")
+
+    if chem_diff <= 8 and trio_diff <= 10:
+        parts.append("solid chemistry and trio balance")
+    elif chem_diff >= 18 or trio_diff >= 22:
+        parts.append("chemistry balance is a bit less tidy")
+
+    if bad_total >= 10:
+        parts.append("contains at least one risky pairing")
+
+    if sim_pen >= 8:
+        parts.append("penalised by a one-sided similar historical matchup")
+
+    if n >= 20 and close_pct >= 65:
+        parts.append("backed by a decent historical sample")
+    elif n <= 5:
+        parts.append("based on a small historical sample")
+
+    if not parts:
+        return "Balanced option across MMR, chemistry and team shape."
+
+    parts = parts[:3]
+    return "; ".join(parts).capitalize() + "."
 
 
 
@@ -1556,16 +1624,43 @@ def render_team_generator_page(show_header: bool = True):
             if key not in unique or score_val < unique[key][0]:
                 unique[key] = (score_val, A, B, breakdown)
 
-        top = sorted(list(unique.values()), key=lambda x: x[0])[:3]
+        prelim = sorted(list(unique.values()), key=lambda x: x[0])[:12]
+        calib_df = _get_true_fairness_calib_cached()
+
+        ranked = []
+        for score_val, A, B, breakdown in prelim:
+            interp = calibration_lookup(float(score_val), calib_df, bucket_size=5.0, close_goal_diff=2)
+            ranked.append({
+                "score": float(score_val),
+                "A": A,
+                "B": B,
+                "breakdown": breakdown,
+                "interp": interp,
+                "recommendation_score": float(_recommendation_score(float(score_val), interp)),
+                "signature": _lineup_signature(A, B),
+            })
+
+        ranked = sorted(
+            ranked,
+            key=lambda x: (-x["recommendation_score"], x["score"])
+        )
+
+        distinct = []
+        seen_signatures = set()
+        for item in ranked:
+            sig = item["signature"]
+            if sig in seen_signatures:
+                continue
+            seen_signatures.add(sig)
+            distinct.append(item)
+            if len(distinct) >= 3:
+                break
 
         st.session_state.tg_top_matchups = {
             "captain_mode": bool(captain_mode),
             "captainA": captainA,
             "captainB": captainB,
-            "items": [
-                {"score": score, "A": A, "B": B, "breakdown": breakdown}
-                for (score, A, B, breakdown) in top
-            ],
+            "items": distinct,
         }
 
     # ----- Render persisted results (if any) -----
@@ -1588,11 +1683,16 @@ def render_team_generator_page(show_header: bool = True):
             return ("🔵⚪", "Blue/White"), ("🔴⚫", "Red/Black")
         return ("🔴⚫", "Red/Black"), ("🔵⚪", "Blue/White")
 
+    best_reco = max((float(x.get("recommendation_score", 0.0) or 0.0) for x in payload.get("items", [])), default=0.0)
+
     for i, item in enumerate(payload["items"], 1):
         score = float(item["score"])
         A = list(item["A"])
         B = list(item["B"])
         breakdown = dict(item["breakdown"])
+        interp = dict(item.get("interp") or {})
+        reco_score = float(item.get("recommendation_score", 0.0) or 0.0)
+        delta_from_best = max(0.0, best_reco - reco_score)
 
         disp_A = ([captainA] + A) if (captain_mode and captainA) else A[:]
         disp_B = ([captainB] + B) if (captain_mode and captainB) else B[:]
@@ -1605,6 +1705,11 @@ def render_team_generator_page(show_header: bool = True):
         palA = palette(teamA_color)
         palB = palette(teamB_color)
 
+        badge = "#1 Best Matchup" if i == 1 else f"#{i} Alternative"
+        badge_bg = "rgba(16,185,129,0.18)" if i == 1 else "rgba(148,163,184,0.16)"
+        badge_border = "#10b981" if i == 1 else "#64748b"
+        verdict = _matchup_reason(breakdown, interp)
+
         st.markdown(
             f"""
             <div style="
@@ -1612,14 +1717,18 @@ def render_team_generator_page(show_header: bool = True):
                 border: 3px solid #444;
                 border-radius: 12px;
                 padding: 10px;
-                margin: 10px 0 20px 0;
+                margin: 10px 0 10px 0;
                 font-size: 1.3em;
                 font-weight: 700;
                 background: linear-gradient(90deg, {palA['bg']} 0%, {palB['bg']} 100%);
             ">
+                <div style="display:flex;justify-content:center;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
+                    <span style="padding:4px 10px;border-radius:999px;border:1px solid {badge_border};background:{badge_bg};font-size:0.75em;">{badge}</span>
+                </div>
                 {teamA_icon} <span style="color:{palA['fg']};">Team A: {teamA_color}</span>
                 &nbsp;&nbsp;vs&nbsp;&nbsp;
                 {teamB_icon} <span style="color:{palB['fg']};">Team B: {teamB_color}</span>
+                <div style="font-size:0.6em;font-weight:600;opacity:0.95;margin-top:8px;">{verdict}</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1628,7 +1737,7 @@ def render_team_generator_page(show_header: bool = True):
         # Clean matchup card (no repeated sub-headers)
         boxA = f"""
         <div style='background:{palA["bg"]};border:1px solid {palA["fg"]}40;border-radius:12px;padding:10px 12px;'>
-        <div style="font-weight:800;margin-bottom:6px;">Avg MMR (Form-Adjusted) {a_eff:.0f}</div>
+        <div style="font-weight:800;margin-bottom:6px;">Avg MMR {a_eff:.0f}</div>
         <div style="line-height:1.7;">
             {'<br>'.join(_name_ui(p, players_df) for p in disp_A)}
         </div>
@@ -1637,7 +1746,7 @@ def render_team_generator_page(show_header: bool = True):
 
         boxB = f"""
         <div style='background:{palB["bg"]};border:1px solid {palB["fg"]}40;border-radius:12px;padding:10px 12px;text-align:right;'>
-        <div style="font-weight:800;margin-bottom:6px;">Avg MMR (Form-Adjusted) {b_eff:.0f}</div>
+        <div style="font-weight:800;margin-bottom:6px;">Avg MMR {b_eff:.0f}</div>
         <div style="line-height:1.7;">
             {'<br>'.join(_name_ui(p, players_df) for p in disp_B)}
         </div>
@@ -1649,14 +1758,12 @@ def render_team_generator_page(show_header: bool = True):
         with cR:
             st.markdown(boxB, unsafe_allow_html=True)
 
-        calib_df = _get_true_fairness_calib_cached()
-        interp = calibration_lookup(float(score), calib_df, bucket_size=5.0, close_goal_diff=2)
-
         q = interp.get("quality", None)
         close_pct = interp.get("close_pct", None)
         typical = interp.get("typical_margin", None)
-        n = interp.get("n", 0)
+        n = int(interp.get("n", 0) or 0)
         bucket = interp.get("bucket", None)
+        conf = _confidence_label(n)
 
         # Headline: Matchup Quality (0–100)
         if q is None:
@@ -1666,32 +1773,14 @@ def render_team_generator_page(show_header: bool = True):
             c1, c2, c3, c4 = st.columns(4)
 
             c1.metric("Matchup Quality", f"{q:.0f}/100")
+            c2.metric("Chance of close game", f"{close_pct:.0f}%")
+            c3.metric("Expected margin", f"{typical:.1f} goals")
+            c4.metric("Historical sample size", f"{n}", help=f"{n} similar past matches · {conf}")
 
-            c2.metric(
-                "Chance of close game",
-                f"{close_pct:.0f}%"
-            )
-
-            c3.metric(
-                "Expected margin",
-                f"{typical:.1f} goals"
-            )
-
-            # Confidence wording for sample size
-            if n >= 40:
-                conf = "high confidence"
-            elif n >= 20:
-                conf = "medium confidence"
-            elif n >= 10:
-                conf = "low confidence"
-            else:
-                conf = "very low confidence"
-
-            c4.metric(
-                "Historical sample size",
-                f"{n}",
-                help=f"{n} similar past matches · {conf}"
-            )
+        st.caption(
+            f"Recommendation score: {reco_score:.1f} · {conf} · "
+            f"sorted using quality, closeness, expected margin and sample strength"
+        )
 
         use_key = f"use_matchup_{i}"
         if st.button("✅ Use this matchup for Matchday Card", key=use_key):
@@ -1700,7 +1789,7 @@ def render_team_generator_page(show_header: bool = True):
             st.session_state.selected_matchup = {"team_a": disp_A, "team_b": disp_B, "picked_index": i}
             st.session_state.mdk_expanded = True
             st.rerun()
-        with st.expander("🔍 Fairness Breakdown"):
+        with st.expander("🔍 Fairness Breakdown", expanded=(i == 0)):
             st.markdown(
                 f"""
             **Overall fairness score:** `{score:.2f}`  

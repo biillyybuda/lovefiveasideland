@@ -1,5 +1,6 @@
 # utils/league_utils.py
 import streamlit as st
+from utils.cache_utils import invalidate_app_caches
 from utils.auth_utils import sb_client_authed
 from utils.db_utils import get_conn
 
@@ -170,7 +171,7 @@ def league_selector_ui():
                 return False
 
             # Success → store league in session
-            st.cache_data.clear()
+            invalidate_app_caches()
             st.session_state.league_id = result["league_id"]
             st.session_state.league_name = result["league_name"]
             st.session_state.league_role = result["role"]
@@ -182,7 +183,7 @@ def league_selector_ui():
     # If only one league, auto-select
     if len(leagues) == 1 and not st.session_state.get("league_id"):
         only = leagues[0]
-        st.cache_data.clear()
+        invalidate_app_caches()
         st.session_state.league_id = int(only["id"]) # type: ignore
         st.session_state.league_name = only["name"] # type: ignore
         st.session_state.league_role = only.get("role") # type: ignore
@@ -194,7 +195,7 @@ def league_selector_ui():
     if st.button("Enter league", use_container_width=True):
         idx = labels.index(choice)
         selected = leagues[idx]
-        st.cache_data.clear()
+        invalidate_app_caches()
         st.session_state.league_id = int(selected["id"]) # type: ignore
         st.session_state.league_name = selected["name"] # type: ignore
         st.session_state.league_role = selected.get("role") # type: ignore

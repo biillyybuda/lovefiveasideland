@@ -11,6 +11,7 @@ import hashlib
 from typing import Optional, Dict, Any
 
 import streamlit as st
+from utils.cache_utils import invalidate_app_caches
 from supabase import create_client
 
 from streamlit_cookies_controller import CookieController, RemoveEmptyElementContainer
@@ -295,5 +296,5 @@ def logout_ui():
         except Exception:
             pass
 
-        st.cache_data.clear()
+        invalidate_app_caches()
         st.rerun()
