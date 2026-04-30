@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import textwrap
+from io import StringIO
 from collections import defaultdict
 from utils.mmr_utils import get_season_mmr, get_current_season_start
 
@@ -576,7 +577,7 @@ def load_mmr_history_cached(league_id: int) -> pd.DataFrame:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def season_baseline_map(df_json: str) -> dict[int, float]:
-    df = pd.read_json(df_json)
+    df = pd.read_json(StringIO(df_json))
 
     df["player_id"] = pd.to_numeric(df["player_id"], errors="coerce").fillna(0).astype(int)
 
@@ -607,7 +608,7 @@ def load_mmr_history_full_cached(league_id: int) -> pd.DataFrame:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def compute_global_win_att(matches_json: str, min_games: int):
-    matches = pd.read_json(matches_json)
+    matches = pd.read_json(StringIO(matches_json))
 
     games_played = defaultdict(int)
     wins = defaultdict(int)
