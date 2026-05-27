@@ -163,30 +163,70 @@ def query_df_cached(query: str, params: tuple = ()):
 # -----------------------------
 # Data loaders (used widely)
 # -----------------------------
-@st.cache_data(ttl=300)
-def load_players_df():
-    league_id = get_current_league_id()
-    with pooled_conn() as conn:
-        df = pd.read_sql(
-            'SELECT * FROM public.players WHERE league_id = %s ORDER BY name',
-            conn,
-            params=(league_id,),
-        )
-    return df
-@st.cache_data(ttl=300)
-def load_matches_df():
-    league_id = get_current_league_id()
-    with pooled_conn() as conn:
-        df = pd.read_sql(
-            'SELECT * FROM public.matches WHERE league_id = %s ORDER BY date',
-            conn,
-            params=(league_id,),
-        )
-    return df
+# Important performance/correctness note:
+# Streamlit cache_data is process-wide, so zero-argument cached loaders can leak
+# data between leagues. Keep public functions zero-arg for compatibility, but
+# put the league_id into the cached function key.
 
 @st.cache_data(ttl=300, show_spinner=False)
-def sql_df(query: str, params: tuple = ()):
-    return query_df_cached(query, params)
+def _load_players_df_cached(league_id: int):
+    with pooled_conn() as conn:
+        return pd.read_sql(
+            """
+            SELECT *
+            FROM public.players
+            WHERE league_id = %s
+            ORDER BY name
+            """,
+            conn,
+            params=(int(league_id),),
+        )
+
+
+def load_players_df():
+    return _load_players_df_cached(get_current_league_id())
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_matches_df_cached(league_id: int):
+    with pooled_conn() as conn:
+        return pd.read_sql(
+            """
+            SELECT *
+            FROM public.matches
+            WHERE league_id = %s
+            ORDER BY date
+            """,
+            conn,
+            params=(int(league_id),),
+        )
+
+
+def load_matches_df():
+    return _load_matches_df_cached(get_current_league_id())
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_active_players_light_cached(league_id: int):
+    with pooled_conn() as conn:
+        return pd.read_sql(
+            """
+            SELECT id, name, display_name, mmr, matches_played, wins,
+                   win_streak, lose_streak, fitness, strengths, is_active
+            FROM public.players
+            WHERE league_id = %s
+              AND COALESCE(is_active, 1) = 1
+            ORDER BY name
+            """,
+            conn,
+            params=(int(league_id),),
+        )
+
+
+def load_active_players_light_df():
+    """Fast player loader for UI pickers/cards that do not need every column."""
+    return _load_active_players_light_cached(get_current_league_id())
+
 
 # -----------------------------
 # Backups (Supabase handles backups)
@@ -195,3 +235,28 @@ def sql_df(query: str, params: tuple = ()):
 def backup_db_manual():
     # No local .db file anymore. Leave as a compatibility stub.
     return None
+
+# -----------------------------
+# Backwards-compatible SQL helpers
+# -----------------------------
+# Some existing pages import sql_df directly from utils.db_utils.
+# Keep this API stable while still using the pooled/cached query path above.
+
+def sql_df(query: str, params: tuple = ()):
+    """Compatibility wrapper used by older pages such as charts_page.py."""
+    if params is None:
+        params = ()
+    if not isinstance(params, tuple):
+        try:
+            params = tuple(params)
+        except Exception:
+            params = (params,)
+    return query_df_cached(query, params)
+
+
+def clear_db_caches():
+    """Clear Streamlit data caches after writes/imports."""
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass

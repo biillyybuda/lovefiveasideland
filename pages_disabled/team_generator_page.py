@@ -7,6 +7,10 @@ from utils.team_ai_engine import (
     build_true_fairness_calibration,
     calibration_lookup,
 )
+try:
+    from utils.team_ai_engine import evaluate_teams_v2
+except Exception:
+    evaluate_teams_v2 = None
 
 # now decorators are safe
 @st.cache_data(ttl=60*60*6, show_spinner=False)
@@ -15,6 +19,10 @@ def _get_true_fairness_calib_cached():
         return build_true_fairness_calibration(close_goal_diff=2, bucket_size=5.0)
     except Exception:
         return pd.DataFrame(columns=["fairness_pre", "goal_diff", "is_close", "date"])
+
+def _get_current_calibration():
+    return _get_true_fairness_calib_cached()
+
 
 import streamlit as st
 import pandas as pd
@@ -29,7 +37,7 @@ from utils.betting_markets import build_markets, blended_expected_goals
 
 
 
-from utils.db_utils import load_players_df, load_matches_df, get_conn as open_db
+from utils.db_utils import load_players_df, get_conn as open_db
 from utils.team_ai_engine import evaluate_teams, get_engine_state, clean_name
 from utils.calc_utils import calibrate_winprob_scale, expected_score_calibrated
 from utils.preview_insights import generate_preview_insights
@@ -37,7 +45,11 @@ from utils.ui_components import page_header
 
 @st.cache_data(ttl=300)
 def _players_table_cached():
-    return load_players_df()
+    conn = open_db()
+    try:
+        return pd.read_sql("SELECT * FROM players", conn)
+    finally:
+        conn.close()
 
 def _name_ui(name: str, players_df: pd.DataFrame) -> str:
     """Return DB display_name if present, else fall back to _display_name()."""
@@ -70,78 +82,6 @@ def _format_1dp(styler, df: pd.DataFrame):
     except Exception:
         pass
     return styler
-
-
-def _lineup_signature(team_a: list[str], team_b: list[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    a = tuple(sorted(clean_name(x) for x in team_a if str(x).strip()))
-    b = tuple(sorted(clean_name(x) for x in team_b if str(x).strip()))
-    return a, b
-
-
-def _confidence_label(n: int) -> str:
-    if n >= 40:
-        return "high confidence"
-    if n >= 20:
-        return "medium confidence"
-    if n >= 10:
-        return "low confidence"
-    return "very low confidence"
-
-
-def _recommendation_score(score: float, interp: dict) -> float:
-    q = float(interp.get("quality") or 0.0)
-    close_pct = float(interp.get("close_pct") or 0.0)
-    typical = float(interp.get("typical_margin") or 9.9)
-    n = float(interp.get("n") or 0.0)
-    confidence_bonus = min(10.0, math.log1p(max(0.0, n)) * 3.0)
-    fairness_bonus = max(0.0, 15.0 - min(float(score), 15.0))
-    return q + (close_pct * 0.18) + confidence_bonus + fairness_bonus - (typical * 7.5)
-
-
-def _matchup_reason(breakdown: dict, interp: dict) -> str:
-    mmr_diff = float(breakdown.get("mmr_diff", 0.0) or 0.0)
-    spread_diff = float(breakdown.get("spread_diff", 0.0) or 0.0)
-    chem_diff = float(breakdown.get("chem_diff", 0.0) or 0.0)
-    trio_diff = float(breakdown.get("trio_diff", 0.0) or 0.0)
-    bad_total = float(breakdown.get("badpair_total", 0.0) or 0.0)
-    sim_pen = float(breakdown.get("similarity_penalty", 0.0) or 0.0)
-    close_pct = float(interp.get("close_pct") or 0.0)
-    n = int(interp.get("n") or 0)
-
-    parts = []
-    if mmr_diff <= 1.5:
-        parts.append("very even on effective MMR")
-    elif mmr_diff <= 4.0:
-        parts.append("close on effective MMR")
-    else:
-        parts.append("slightly wider MMR gap")
-
-    if spread_diff <= 1.5:
-        parts.append("good player-spread balance")
-    elif spread_diff >= 4.5:
-        parts.append("more uneven team shape")
-
-    if chem_diff <= 8 and trio_diff <= 10:
-        parts.append("solid chemistry and trio balance")
-    elif chem_diff >= 18 or trio_diff >= 22:
-        parts.append("chemistry balance is a bit less tidy")
-
-    if bad_total >= 10:
-        parts.append("contains at least one risky pairing")
-
-    if sim_pen >= 8:
-        parts.append("penalised by a one-sided similar historical matchup")
-
-    if n >= 20 and close_pct >= 65:
-        parts.append("backed by a decent historical sample")
-    elif n <= 5:
-        parts.append("based on a small historical sample")
-
-    if not parts:
-        return "Balanced option across MMR, chemistry and team shape."
-
-    parts = parts[:3]
-    return "; ".join(parts).capitalize() + "."
 
 
 
@@ -462,6 +402,8 @@ def _render_previous_meetings_block(team_a: list[str], team_b: list[str], matche
 def _ensure_session_defaults():
     if "tg_top_matchups" not in st.session_state:
         st.session_state.tg_top_matchups = None
+    if "tg_all_matchups" not in st.session_state:
+        st.session_state.tg_all_matchups = None
     if "team_a" not in st.session_state:
         st.session_state.team_a = []
     if "team_b" not in st.session_state:
@@ -496,6 +438,31 @@ def _spacer(h: int = 16):
 
 def _clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, float(x)))
+
+
+def _scale_game_quality(raw_quality: float | int | None) -> float:
+    """Display-friendly match potential score.
+
+    The statistical model's raw quality scores are naturally compressed. A
+    viable suggested matchup should not look like a 22/100 failure, so this
+    uses a softer non-linear scale:
+      - weak viable game: ~40-50
+      - decent game: ~60-70
+      - strong game: ~75-85
+      - exceptional: 90+
+    """
+    try:
+        q = float(raw_quality or 0.0)
+    except Exception:
+        q = 0.0
+
+    if q <= 35.0:
+        return _clamp(30.0 + (q / 35.0) * 20.0, 0.0, 50.0)
+
+    # Diminishing returns above 35 so good options separate nicely without
+    # every decent game looking elite.
+    scaled = 50.0 + 50.0 * (1.0 - math.exp(-(q - 35.0) / 28.0))
+    return _clamp(scaled, 0.0, 100.0)
 
 def _draw_rate_from_matches(matches_eng: pd.DataFrame) -> float:
     """Historic draw rate based on score (results-only)."""
@@ -1476,6 +1443,308 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
         with cB:
             for p in team_b:
                 st.html(card(p, own_team=team_b, opp_team=team_a, fg=teamB_fg, bg=teamB_bg)) # type: ignore
+
+# ----------------------------
+# Diverse option selection + explainable matchup labels
+# ----------------------------
+def _team_split_key(A, B):
+    return frozenset([frozenset(A), frozenset(B)])
+
+
+def _team_overlap_count(A1, B1, A2, B2):
+    """Best orientation overlap between two proposed splits."""
+    sA1, sB1 = set(A1), set(B1)
+    sA2, sB2 = set(A2), set(B2)
+    same = len(sA1 & sA2) + len(sB1 & sB2)
+    swapped = len(sA1 & sB2) + len(sB1 & sA2)
+    return max(same, swapped)
+
+
+def _team_pairs_for_core(team):
+    team = sorted([clean_name(x) for x in team if str(x).strip()])
+    return {tuple(sorted((team[i], team[j]))) for i in range(len(team)) for j in range(i + 1, len(team))}
+
+
+def _team_trios_for_core(team):
+    team = sorted([clean_name(x) for x in team if str(x).strip()])
+    return {tuple(sorted((team[i], team[j], team[k]))) for i in range(len(team)) for j in range(i + 1, len(team)) for k in range(j + 1, len(team))}
+
+
+def _core_reuse_score(row, selected_rows):
+    """How much this option reuses already-shown pair/trio cores.
+
+    This is only used for presentation diversity, not the actual fairness model.
+    """
+    if not selected_rows:
+        return 0.0
+    _rk, _score, A, B, _bd, _interp = row
+    pair_sets = [_team_pairs_for_core(A), _team_pairs_for_core(B)]
+    trio_sets = [_team_trios_for_core(A), _team_trios_for_core(B)]
+    worst = 0.0
+    for sr in selected_rows:
+        # selected_rows stores either raw candidate rows:
+        #   (_rank_key, score, A, B, breakdown, interp)
+        # or displayed shortlist rows:
+        #   (candidate_row, label)
+        # depending on which stage of shortlist building is calling this helper.
+        if isinstance(sr, tuple) and len(sr) == 2 and isinstance(sr[0], tuple):
+            sr = sr[0]
+        if not (isinstance(sr, tuple) and len(sr) >= 6):
+            continue
+        _srk, _sscore, sA, sB, _sbd, _sinterp = sr[:6]
+        for orient in ((sA, sB), (sB, sA)):
+            s_pair_sets = [_team_pairs_for_core(orient[0]), _team_pairs_for_core(orient[1])]
+            s_trio_sets = [_team_trios_for_core(orient[0]), _team_trios_for_core(orient[1])]
+            pair_overlap = sum(len(pair_sets[i] & s_pair_sets[i]) for i in range(2)) / 20.0  # 10 pairs per side in 5v5
+            trio_overlap = sum(len(trio_sets[i] & s_trio_sets[i]) for i in range(2)) / 20.0  # 10 trios per side in 5v5
+            worst = max(worst, pair_overlap + (trio_overlap * 1.4))
+    return float(worst)
+
+
+def _is_diverse_enough(row, selected_rows, max_overlap=7, max_core_reuse=0.72):
+    """Avoid showing 5 near-identical team splits or repeated cores."""
+    if not selected_rows:
+        return True
+    _rk, _score, A, B, _bd, _interp = row
+    for sr in selected_rows:
+        if isinstance(sr, tuple) and len(sr) == 2 and isinstance(sr[0], tuple):
+            sr = sr[0]
+        if not (isinstance(sr, tuple) and len(sr) >= 6):
+            continue
+        _srk, _sscore, sA, sB, _sbd, _sinterp = sr[:6]
+        if _team_overlap_count(A, B, sA, sB) > max_overlap:
+            return False
+    if _core_reuse_score(row, selected_rows) > max_core_reuse:
+        return False
+    return True
+
+
+def _style_val(bd, key, default=0.0):
+    try:
+        return float(bd.get(key, default) or default)
+    except Exception:
+        return float(default)
+
+
+def _matchup_archetype(breakdown: dict) -> str:
+    """Classify the option into a useful football-style matchup label."""
+    fa = _style_val(breakdown, "style_finishing_a")
+    fb = _style_val(breakdown, "style_finishing_b")
+    ca = _style_val(breakdown, "style_creation_a")
+    cb = _style_val(breakdown, "style_creation_b")
+    ia = _style_val(breakdown, "style_impact_a")
+    ib = _style_val(breakdown, "style_impact_b")
+    sa = _style_val(breakdown, "style_save_a")
+    sb = _style_val(breakdown, "style_save_b")
+    chem_diff = _style_val(breakdown, "chem_diff")
+    chem_density = _style_val(breakdown, "chem_density_a") + _style_val(breakdown, "chem_density_b")
+    spread_diff = _style_val(breakdown, "spread_diff")
+    mmr_diff = _style_val(breakdown, "mmr_diff")
+    bad = _style_val(breakdown, "badpair_total")
+
+    avg_finish = (fa + fb) / 2
+    avg_create = (ca + cb) / 2
+    avg_impact = (ia + ib) / 2
+    avg_save = (sa + sb) / 2
+    finish_gap = abs(fa - fb)
+    create_gap = abs(ca - cb)
+
+    if avg_finish >= 0.82 and avg_create >= 0.72 and avg_save < 0.72:
+        return "🔥 End-to-End Chaos"
+    if finish_gap >= 0.18 and create_gap >= 0.18:
+        return "⚡ Counter vs Control"
+    if avg_impact >= 0.82 and mmr_diff <= 14:
+        return "🥊 Heavyweight Clash"
+    if chem_density >= 1.65 and chem_diff <= 4.0:
+        return "🧠 Chemistry Match"
+    if spread_diff <= 7 and mmr_diff <= 10 and avg_create >= 0.65:
+        return "♟️ Tactical Chess Match"
+    if bad >= 2.5:
+        return "🌪️ Volatile Rivalry"
+    if avg_save >= 0.78 and avg_finish < 0.78:
+        return "🧱 Gritty Low-Scoring Battle"
+    return "⚖️ Balanced Battle"
+
+
+def _option_explanation(breakdown: dict, close_pct: float):
+    positives = []
+    risks = []
+
+    if _style_val(breakdown, "mmr_diff") < 10:
+        positives.append("Very balanced MMR")
+    elif _style_val(breakdown, "mmr_diff") < 20:
+        positives.append("Reasonably close MMR")
+
+    if _style_val(breakdown, "style_penalty") < 1.0:
+        positives.append("Excellent role balance")
+    elif _style_val(breakdown, "style_penalty") < 1.7:
+        positives.append("Strong role balance")
+
+    if _style_val(breakdown, "style_link_bonus") > 0.75:
+        positives.append("Strong creator-finisher links")
+    elif _style_val(breakdown, "style_link_bonus") > 0.35:
+        positives.append("Some proven creator-finisher links")
+
+    if close_pct > 60:
+        positives.append("High close-game potential")
+    elif close_pct > 54:
+        positives.append("Decent close-game potential")
+
+    if _style_val(breakdown, "spread_diff") > 12:
+        risks.append("Uneven team shape")
+    if _style_val(breakdown, "chem_diff") > 7:
+        risks.append("Chemistry imbalance")
+    if _style_val(breakdown, "badpair_total") > 2:
+        risks.append("Known weak pairings involved")
+
+    fin_gap = _style_val(breakdown, "style_finishing_a") - _style_val(breakdown, "style_finishing_b")
+    cre_gap = _style_val(breakdown, "style_creation_a") - _style_val(breakdown, "style_creation_b")
+    if fin_gap > 0.18:
+        risks.append("Team A carries more direct goal threat")
+    elif fin_gap < -0.18:
+        risks.append("Team B carries more direct goal threat")
+    if cre_gap > 0.22:
+        risks.append("Team A has more historic creation")
+    elif cre_gap < -0.22:
+        risks.append("Team B has more historic creation")
+
+    if not positives:
+        positives.append("Decent all-round balance")
+    if not risks:
+        risks.append("No major imbalance detected")
+
+    return positives[:4], risks[:4]
+
+
+def _team_identity_summary(breakdown: dict):
+    """Short team identity notes from the historic style layer."""
+    fa = _style_val(breakdown, "style_finishing_a")
+    fb = _style_val(breakdown, "style_finishing_b")
+    ca = _style_val(breakdown, "style_creation_a")
+    cb = _style_val(breakdown, "style_creation_b")
+    sa = _style_val(breakdown, "style_save_a")
+    sb = _style_val(breakdown, "style_save_b")
+    ia = _style_val(breakdown, "style_impact_a")
+    ib = _style_val(breakdown, "style_impact_b")
+
+    def one(f, c, s, i, other_f, other_c, other_s):
+        notes = []
+        if f - other_f > 0.14:
+            notes.append("More direct goal threat")
+        elif c - other_c > 0.18:
+            notes.append("More creative/control-based")
+        elif s - other_s > 0.14:
+            notes.append("Stronger save/defensive profile")
+        elif i >= 0.82:
+            notes.append("High historic impact")
+        else:
+            notes.append("Balanced profile")
+        if f >= 0.80 and c >= 0.70:
+            notes.append("Can score and create")
+        elif f >= 0.80:
+            notes.append("Finisher-heavy")
+        elif c >= 0.75:
+            notes.append("Creator-heavy")
+        return notes[:2]
+
+    return one(fa, ca, sa, ia, fb, cb, sb), one(fb, cb, sb, ib, fa, ca, sa)
+
+
+def _score_candidate_for_philosophy(row, philosophy: str) -> float:
+    """Higher is better. Used to create deliberately different shortlist options."""
+    _rk, score, A, B, bd, interp = row
+    rec = float(interp.get("recommendation_score", 0) or 0)
+    close = float(bd.get("v2_close_pct", interp.get("close_pct", 0)) or 0)
+    margin = float(bd.get("v2_predicted_margin", interp.get("typical_margin", 99)) or 99)
+    mmr = _style_val(bd, "mmr_diff")
+    spread = _style_val(bd, "spread_diff")
+    chem = _style_val(bd, "chem_diff")
+    chem_density = _style_val(bd, "chem_density_a") + _style_val(bd, "chem_density_b")
+    style_bonus = _style_val(bd, "style_link_bonus")
+    finishing_avg = (_style_val(bd, "style_finishing_a") + _style_val(bd, "style_finishing_b")) / 2.0
+    creation_avg = (_style_val(bd, "style_creation_a") + _style_val(bd, "style_creation_b")) / 2.0
+    finishing_gap = abs(_style_val(bd, "style_finishing_a") - _style_val(bd, "style_finishing_b"))
+    creation_gap = abs(_style_val(bd, "style_creation_a") - _style_val(bd, "style_creation_b"))
+
+    if philosophy == "best_overall":
+        return rec
+    if philosophy == "closest_game":
+        return (close * 1.1) + max(0, 100 - margin * 18) - (mmr * 0.35)
+    if philosophy == "pure_mmr":
+        return 100 - (mmr * 3.0) - (spread * 0.35)
+    if philosophy == "highest_chemistry":
+        return 70 + (chem_density * 12) + (style_bonus * 10) - (chem * 2.0) - (margin * 3)
+    if philosophy == "tactical_contrast":
+        contrast = finishing_gap + creation_gap
+        return (contrast * 80) + close - (margin * 7) - (mmr * 0.6)
+    if philosophy == "chaos_match":
+        return (finishing_avg * 35) + (creation_avg * 25) + (style_bonus * 8) + close - (margin * 5) - max(0, mmr - 25)
+    return rec
+
+
+def _build_diverse_smart_options(all_ranked):
+    """Pick a shortlist that gives genuinely different useful options."""
+    if not all_ranked:
+        return []
+
+    selected = []
+    selected_keys = set()
+
+    philosophies = [
+        ("Best overall", "best_overall"),
+        ("Closest expected game", "closest_game"),
+        ("Most even ratings", "pure_mmr"),
+        ("Highest chemistry", "highest_chemistry"),
+        ("Tactical contrast", "tactical_contrast"),
+        ("Chaos matchup", "chaos_match"),
+    ]
+
+    def viable(row):
+        _rk, _score, _A, _B, bd, interp = row
+        margin = float(bd.get("v2_predicted_margin", interp.get("typical_margin", 99)) or 99)
+        mmr = float(bd.get("mmr_diff", 0) or 0)
+        return margin <= 6.5 and mmr <= 45
+
+    viable_rows = [r for r in all_ranked if viable(r)] or all_ranked[:]
+
+    for label, philosophy in philosophies:
+        def adjusted(r):
+            return _score_candidate_for_philosophy(r, philosophy) - (_core_reuse_score(r, selected) * 28.0)
+
+        candidates = sorted(viable_rows, key=adjusted, reverse=True)
+        chosen = None
+
+        for max_overlap, max_core in ((6, 0.55), (7, 0.68), (8, 0.85), (10, 99.0)):
+            for r in candidates:
+                _rk, _score, A, B, _bd, _interp = r
+                k = _team_split_key(A, B)
+                if k in selected_keys:
+                    continue
+                if max_overlap >= 10 or _is_diverse_enough(r, selected, max_overlap=max_overlap, max_core_reuse=max_core):
+                    chosen = r
+                    break
+            if chosen is not None:
+                break
+
+        if chosen is not None:
+            _rk, _score, A, B, _bd, _interp = chosen
+            selected.append((chosen, label))
+            selected_keys.add(_team_split_key(A, B))
+
+        if len(selected) >= 5:
+            break
+
+    for r in all_ranked:
+        if len(selected) >= 5:
+            break
+        _rk, _score, A, B, _bd, _interp = r
+        k = _team_split_key(A, B)
+        if k not in selected_keys:
+            selected.append((r, "Strong alternative"))
+            selected_keys.add(k)
+
+    return selected[:5]
+
 def render_team_generator_page(show_header: bool = True):
     _ensure_session_defaults()
     _ensure_color_settings()
@@ -1593,6 +1862,7 @@ def render_team_generator_page(show_header: bool = True):
     if st.session_state.get("tg_last_config") != current_hash:
         st.session_state.tg_last_config = current_hash
         st.session_state.tg_top_matchups = None
+        st.session_state.tg_all_matchups = None
         st.session_state.tg_has_generated = False
 
     # ----- Generate & persist results so clicking "Use this matchup" doesn't wipe them -----
@@ -1614,7 +1884,10 @@ def render_team_generator_page(show_header: bool = True):
                 eval_A_norm = [p.lower() for p in eval_A]
                 eval_B_norm = [p.lower() for p in eval_B]
 
-                fairness_score, breakdown = evaluate_teams(eval_A_norm, eval_B_norm)
+                if evaluate_teams_v2 is not None:
+                    fairness_score, breakdown = evaluate_teams_v2(eval_A_norm, eval_B_norm)
+                else:
+                    fairness_score, breakdown = evaluate_teams(eval_A_norm, eval_B_norm)
                 scored.append((float(fairness_score), A, B, breakdown))
 
         # Remove mirrored duplicates
@@ -1624,43 +1897,82 @@ def render_team_generator_page(show_header: bool = True):
             if key not in unique or score_val < unique[key][0]:
                 unique[key] = (score_val, A, B, breakdown)
 
-        prelim = sorted(list(unique.values()), key=lambda x: x[0])[:12]
-        calib_df = _get_true_fairness_calib_cached()
+        # Build a full explorer dataset so we can see every possible split,
+        # filter it, and tune the ranking with human judgement.
+        try:
+            calib_df_for_rank = _get_current_calibration()
+        except Exception:
+            calib_df_for_rank = pd.DataFrame()
 
-        ranked = []
-        for score_val, A, B, breakdown in prelim:
-            interp = calibration_lookup(float(score_val), calib_df, bucket_size=5.0, close_goal_diff=2)
-            ranked.append({
-                "score": float(score_val),
-                "A": A,
-                "B": B,
-                "breakdown": breakdown,
-                "interp": interp,
-                "recommendation_score": float(_recommendation_score(float(score_val), interp)),
-                "signature": _lineup_signature(A, B),
-            })
+        all_ranked = []
+        for idx, (score_val, A, B, breakdown) in enumerate(list(unique.values()), 1):
+            try:
+                interp = calibration_lookup(float(score_val), calib_df_for_rank, bucket_size=5.0, close_goal_diff=2)
+            except Exception:
+                interp = {"quality": None, "close_pct": None, "typical_margin": None, "n": 0, "bucket": None}
 
-        ranked = sorted(
-            ranked,
-            key=lambda x: (-x["recommendation_score"], x["score"])
-        )
+            # Prefer V2 fields if the engine provides them. Otherwise use historical calibration.
+            q = breakdown.get("v2_quality", interp.get("quality", None))
+            close = breakdown.get("v2_close_pct", interp.get("close_pct", None))
+            margin = breakdown.get("v2_predicted_margin", interp.get("typical_margin", None))
 
-        distinct = []
-        seen_signatures = set()
-        for item in ranked:
-            sig = item["signature"]
-            if sig in seen_signatures:
-                continue
-            seen_signatures.add(sig)
-            distinct.append(item)
-            if len(distinct) >= 3:
-                break
+            q_raw = float(q) if q is not None else 0.0
+            q_scaled = _scale_game_quality(q_raw)
+            close = float(close) if close is not None else 0.0
+            margin = float(margin) if margin is not None else 99.0
+
+            mmr_diff = float(breakdown.get("mmr_diff", 0.0) or 0.0)
+            spread_diff = float(breakdown.get("spread_diff", 0.0) or 0.0)
+            chem_diff = float(breakdown.get("chem_diff", 0.0) or 0.0)
+            bad_total = float(breakdown.get("badpair_total", 0.0) or 0.0)
+            sim_pen = float(breakdown.get("similarity_penalty", 0.0) or 0.0)
+
+            paper_score = 100.0
+            paper_score -= min(55.0, mmr_diff * 1.25)
+            paper_score -= min(20.0, spread_diff * 0.35)
+            paper_score -= min(10.0, chem_diff * 0.25)
+            paper_score -= min(8.0, bad_total * 1.2)
+            paper_score -= min(7.0, sim_pen * 0.7)
+            paper_score = _clamp(paper_score, 0.0, 100.0)
+
+            margin_score = _clamp(100.0 - max(0.0, margin - 1.5) * 22.0, 0.0, 100.0)
+            recommendation_score = _clamp((paper_score * 0.35) + (margin_score * 0.30) + (close * 0.20) + (q_scaled * 0.15), 0.0, 100.0)
+
+            interp["recommendation_score"] = recommendation_score
+            interp["paper_score"] = paper_score
+            interp["margin_score"] = margin_score
+            interp["quality_raw"] = q_raw
+            interp["quality_scaled"] = q_scaled
+
+            rank_key = (-recommendation_score, margin, -paper_score, -close, float(score_val))
+            all_ranked.append((rank_key, score_val, A, B, breakdown, interp))
+
+        all_ranked.sort(key=lambda x: x[0])
+
+        # Pick a deliberately diverse shortlist. Each option has a different
+        # footballing philosophy instead of showing five tiny variations of the
+        # same safe chemistry split. Core-reuse penalties are only used for this
+        # shortlist, not for the actual fairness model.
+        top = _build_diverse_smart_options(all_ranked)
+
+        st.session_state.tg_all_matchups = {
+            "captain_mode": bool(captain_mode),
+            "captainA": captainA,
+            "captainB": captainB,
+            "items": [
+                {"rank": rank_i, "score": score, "A": A, "B": B, "breakdown": breakdown, "quality_interp": interp}
+                for rank_i, (_rank_key, score, A, B, breakdown, interp) in enumerate(all_ranked, 1)
+            ],
+        }
 
         st.session_state.tg_top_matchups = {
             "captain_mode": bool(captain_mode),
             "captainA": captainA,
             "captainB": captainB,
-            "items": distinct,
+            "items": [
+                {"rank": rank_i, "smart_label": label, "score": score, "A": A, "B": B, "breakdown": breakdown, "quality_interp": interp}
+                for rank_i, ((_rank_key, score, A, B, breakdown, interp), label) in enumerate(top, 1)
+            ],
         }
 
     # ----- Render persisted results (if any) -----
@@ -1683,16 +1995,84 @@ def render_team_generator_page(show_header: bool = True):
             return ("🔵⚪", "Blue/White"), ("🔴⚫", "Red/Black")
         return ("🔴⚫", "Red/Black"), ("🔵⚪", "Blue/White")
 
-    best_reco = max((float(x.get("recommendation_score", 0.0) or 0.0) for x in payload.get("items", [])), default=0.0)
+    # Full matchup explorer: every unique 5v5 split, with filters/sorting.
+    all_payload = st.session_state.get("tg_all_matchups") or {}
+    all_items = list(all_payload.get("items") or [])
+    if all_items:
+        with st.expander(f"🧪 Explore every possible game ({len(all_items)} unique splits)", expanded=False):
+            st.caption("Use this to sanity-check the AI. Filter/sort the full list, then pick the split that looks best to you.")
+
+            def _fmt_team(team):
+                return ", ".join(_name_ui(p, players_df) for p in team)
+
+            rows = []
+            for it in all_items:
+                bd = dict(it.get("breakdown") or {})
+                interp = dict(it.get("quality_interp") or {})
+                A0 = list(it.get("A") or [])
+                B0 = list(it.get("B") or [])
+                disp_A0 = ([all_payload.get("captainA")] + A0) if (all_payload.get("captain_mode") and all_payload.get("captainA")) else A0[:]
+                disp_B0 = ([all_payload.get("captainB")] + B0) if (all_payload.get("captain_mode") and all_payload.get("captainB")) else B0[:]
+                rows.append({
+                    "ID": int(it.get("rank", 0) or 0),
+                    "Recommendation": round(float(interp.get("recommendation_score", 0) or 0), 1),
+                    "Potential": round(float(interp.get("quality_scaled", _scale_game_quality(bd.get("v2_quality", interp.get("quality", 0)))) or 0), 1),
+                    "Close %": round(float(bd.get("v2_close_pct", interp.get("close_pct", 0)) or 0), 1),
+                    "Margin": round(float(bd.get("v2_predicted_margin", interp.get("typical_margin", 0)) or 0), 1),
+                    "MMR diff": round(float(bd.get("mmr_diff", 0) or 0), 1),
+                    "Spread diff": round(float(bd.get("spread_diff", 0) or 0), 1),
+                    "Chem diff": round(float(bd.get("chem_diff", 0) or 0), 1),
+                    "Bad pairs": round(float(bd.get("badpair_total", 0) or 0), 1),
+                    "Archetype": _matchup_archetype(bd),
+                    "Style adj": round(float(bd.get("style_net", 0) or 0), 2),
+                    "Role penalty": round(float(bd.get("style_penalty", 0) or 0), 2),
+                    "Team A": _fmt_team(disp_A0),
+                    "Team B": _fmt_team(disp_B0),
+                })
+
+            all_df = pd.DataFrame(rows)
+            if not all_df.empty:
+                f1, f2, f3 = st.columns(3)
+                max_margin = f1.slider("Max expected margin", 0.5, 8.0, 8.0, 0.5)
+                max_mmr = f2.slider("Max MMR diff", 0.0, 120.0, 120.0, 5.0)
+                min_close = f3.slider("Min close-game chance", 0, 100, 0, 5)
+
+                sort_by = st.selectbox(
+                    "Sort table by",
+                    ["Recommendation", "Potential", "Close %", "Margin", "MMR diff", "Spread diff", "Chem diff", "Style adj", "Role penalty"],
+                    index=0,
+                )
+                ascending = sort_by in ["Margin", "MMR diff", "Spread diff", "Chem diff", "Style adj", "Role penalty"]
+
+                view = all_df[
+                    (all_df["Margin"] <= float(max_margin))
+                    & (all_df["MMR diff"] <= float(max_mmr))
+                    & (all_df["Close %"] >= float(min_close))
+                ].copy()
+                view = view.sort_values(sort_by, ascending=ascending).reset_index(drop=True)
+
+                st.dataframe(view, use_container_width=True, hide_index=True)
+
+                if not view.empty:
+                    pick_id = st.selectbox("Pick a game from the filtered list", view["ID"].astype(int).tolist(), format_func=lambda x: f"Game ID {x}")
+                    if st.button("✅ Use selected game from explorer", key="use_explorer_matchup"):
+                        chosen = next((it for it in all_items if int(it.get("rank", 0) or 0) == int(pick_id)), None)
+                        if chosen:
+                            A_ch = list(chosen.get("A") or [])
+                            B_ch = list(chosen.get("B") or [])
+                            disp_A_ch = ([all_payload.get("captainA")] + A_ch) if (all_payload.get("captain_mode") and all_payload.get("captainA")) else A_ch[:]
+                            disp_B_ch = ([all_payload.get("captainB")] + B_ch) if (all_payload.get("captain_mode") and all_payload.get("captainB")) else B_ch[:]
+                            st.session_state.team_a = disp_A_ch
+                            st.session_state.team_b = disp_B_ch
+                            st.session_state.selected_matchup = {"team_a": disp_A_ch, "team_b": disp_B_ch, "picked_index": int(pick_id)}
+                            st.session_state.mdk_expanded = True
+                            st.rerun()
 
     for i, item in enumerate(payload["items"], 1):
         score = float(item["score"])
         A = list(item["A"])
         B = list(item["B"])
         breakdown = dict(item["breakdown"])
-        interp = dict(item.get("interp") or {})
-        reco_score = float(item.get("recommendation_score", 0.0) or 0.0)
-        delta_from_best = max(0.0, best_reco - reco_score)
 
         disp_A = ([captainA] + A) if (captain_mode and captainA) else A[:]
         disp_B = ([captainB] + B) if (captain_mode and captainB) else B[:]
@@ -1705,11 +2085,6 @@ def render_team_generator_page(show_header: bool = True):
         palA = palette(teamA_color)
         palB = palette(teamB_color)
 
-        badge = "#1 Best Matchup" if i == 1 else f"#{i} Alternative"
-        badge_bg = "rgba(16,185,129,0.18)" if i == 1 else "rgba(148,163,184,0.16)"
-        badge_border = "#10b981" if i == 1 else "#64748b"
-        verdict = _matchup_reason(breakdown, interp)
-
         st.markdown(
             f"""
             <div style="
@@ -1717,22 +2092,22 @@ def render_team_generator_page(show_header: bool = True):
                 border: 3px solid #444;
                 border-radius: 12px;
                 padding: 10px;
-                margin: 10px 0 10px 0;
+                margin: 10px 0 20px 0;
                 font-size: 1.3em;
                 font-weight: 700;
                 background: linear-gradient(90deg, {palA['bg']} 0%, {palB['bg']} 100%);
             ">
-                <div style="display:flex;justify-content:center;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
-                    <span style="padding:4px 10px;border-radius:999px;border:1px solid {badge_border};background:{badge_bg};font-size:0.75em;">{badge}</span>
-                </div>
                 {teamA_icon} <span style="color:{palA['fg']};">Team A: {teamA_color}</span>
                 &nbsp;&nbsp;vs&nbsp;&nbsp;
                 {teamB_icon} <span style="color:{palB['fg']};">Team B: {teamB_color}</span>
-                <div style="font-size:0.6em;font-weight:600;opacity:0.95;margin-top:8px;">{verdict}</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
+
+        interp_saved = dict(item.get("quality_interp") or {})
+        smart_label = str(item.get("smart_label") or "Option")
+        st.markdown(f"**Option {i} — {smart_label}**")
 
         # Clean matchup card (no repeated sub-headers)
         boxA = f"""
@@ -1758,29 +2133,57 @@ def render_team_generator_page(show_header: bool = True):
         with cR:
             st.markdown(boxB, unsafe_allow_html=True)
 
-        q = interp.get("quality", None)
-        close_pct = interp.get("close_pct", None)
-        typical = interp.get("typical_margin", None)
-        n = int(interp.get("n", 0) or 0)
-        bucket = interp.get("bucket", None)
-        conf = _confidence_label(n)
+        interp = dict(item.get("quality_interp") or {})
+        q_raw = breakdown.get("v2_quality", interp.get("quality_raw", interp.get("quality", None)))
+        q = interp.get("quality_scaled", _scale_game_quality(q_raw))
+        close_pct = breakdown.get("v2_close_pct", interp.get("close_pct", None))
+        typical = breakdown.get("v2_predicted_margin", interp.get("typical_margin", None))
+        n = int(breakdown.get("v2_hist_n", interp.get("n", 0)) or 0)
+        bucket = breakdown.get("v2_hist_range", interp.get("bucket", None))
+        confidence = breakdown.get("v2_hist_confidence_label", interp.get("confidence", None))
 
         # Headline: Matchup Quality (0–100)
         if q is None:
             st.caption(f"Fairness Score: {score:.2f} (lower = more balanced)")
         else:
-            # --- Matchup Quality Panel ---
-            c1, c2, c3, c4 = st.columns(4)
+            q = float(q or 0.0)
+            close_pct = float(close_pct or 0.0)
+            typical = float(typical or 0.0)
 
-            c1.metric("Matchup Quality", f"{q:.0f}/100")
-            c2.metric("Chance of close game", f"{close_pct:.0f}%")
-            c3.metric("Expected margin", f"{typical:.1f} goals")
-            c4.metric("Historical sample size", f"{n}", help=f"{n} similar past matches · {conf}")
+            c1, c2 = st.columns(2)
+            c1.metric("⚽ Match Potential", f"{q:.0f}/100", help="A display-friendly read on how promising this matchup looks. It blends balance, predicted margin, close-game chance and historic style, but it is not a guarantee.")
+            c2.metric("Tight-game chance", f"{close_pct:.0f}%", help="Estimated chance this game finishes within 2 goals, based on similar previous games and the V2 fallback model.")
 
-        st.caption(
-            f"Recommendation score: {reco_score:.1f} · {conf} · "
-            f"sorted using quality, closeness, expected margin and sample strength"
-        )
+            # --- Human-readable AI explanation layer ---
+            archetype = _matchup_archetype(breakdown)
+            positives, risks = _option_explanation(breakdown, float(close_pct or 0))
+            team_a_identity, team_b_identity = _team_identity_summary(breakdown)
+
+            st.markdown(f"**Matchup archetype:** {archetype}")
+
+            id_cols = st.columns(2)
+            with id_cols[0]:
+                st.markdown("**Team A identity**")
+                for note in team_a_identity:
+                    st.markdown(f"- 🔵 {note}")
+            with id_cols[1]:
+                st.markdown("**Team B identity**")
+                for note in team_b_identity:
+                    st.markdown(f"- 🔴 {note}")
+
+            exp_cols = st.columns(2)
+            with exp_cols[0]:
+                st.markdown("**Why the AI likes this**")
+                for p in positives:
+                    st.markdown(f"- 🟢 {p}")
+
+            with exp_cols[1]:
+                st.markdown("**Potential risks**")
+                for r in risks:
+                    icon = "🟢" if "No major" in r else "🟡"
+                    st.markdown(f"- {icon} {r}")
+
+
 
         use_key = f"use_matchup_{i}"
         if st.button("✅ Use this matchup for Matchday Card", key=use_key):
@@ -1789,10 +2192,12 @@ def render_team_generator_page(show_header: bool = True):
             st.session_state.selected_matchup = {"team_a": disp_A, "team_b": disp_B, "picked_index": i}
             st.session_state.mdk_expanded = True
             st.rerun()
-        with st.expander("🔍 Fairness Breakdown", expanded=(i == 0)):
+        with st.expander("🔍 Fairness Breakdown"):
             st.markdown(
                 f"""
-            **Overall fairness score:** `{score:.2f}`  
+            **V2 score:** `{score:.2f}`  
+            **Hidden ranking score:** `{float(interp.get("recommendation_score", 0) or 0):.1f}/100`  
+            **Raw potential:** `{float(q_raw or 0):.1f}` → **display potential:** `{float(q or 0):.1f}/100`  
             **Comparison range:** `{bucket or "—"}`
             """
             )
@@ -1856,10 +2261,46 @@ def render_team_generator_page(show_header: bool = True):
     with st.expander("ℹ️ How this works"):
         st.write(
             """
+### 🧠 How the team generator works
+
 - **MMR** is the main balancing factor (result-based rating).
-- **Form** adjusts effective rating using recent results (score-based).
-- **Fitness** adds a small adjustment if you maintain that field.
-- **Spread** checks the *shape* of each team (prevents one carry + passengers vs a flat team).
-- **Chemistry** is based on how well players have historically performed together (results-only).
+- **Form** adjusts ratings slightly using recent results.
+- **Spread** checks the *shape* of each team (avoids one strong player carrying weaker ones).
+- **Chemistry** is based on how well players have historically performed together.
+
+---
+
+### 📊 Understanding the scores
+
+**Match Potential**
+- This measures how promising the matchup looks on paper
+- It combines:
+  - rating balance (MMR)
+  - team shape (spread)
+  - chemistry
+  - predicted goal difference
+  - historic style balance
+- 👉 Think of it as: *“Is this a good-looking option?”*
+
+**Tight-game chance**
+- This estimates how often games like this actually end up close
+- Based on:
+  - similar past matchups
+  - real scorelines from your history
+- 👉 Think of it as: *“Will this actually be a close game?”*
+
+---
+
+### ⚠️ Important
+
+These two scores are **related but not the same**
+
+- A game can be perfectly balanced on paper  
+  → but still not end up close (your group is unpredictable)
+
+- A slightly uneven game  
+  → can still be tight based on history
+
+👉 That’s why both are shown — one is *structure*, one is *reality*
             """.strip()
         )

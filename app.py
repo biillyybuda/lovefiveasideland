@@ -4,6 +4,7 @@ from pathlib import Path
 import os
 import streamlit as st
 import locale
+import importlib
 
 def set_time_locale():
     for loc in ("en_GB.UTF-8", "en_GB.utf8", "en_GB", "C.UTF-8", "C"):
@@ -88,6 +89,21 @@ if not st.session_state.get("league_id"):
     st.rerun()
 
 # At this point we are logged in and have a league selected
+
+# Warm the two core DB caches once per session/league.
+# This makes the first real page load do the DB work, then page switching is faster.
+try:
+    _preload_key = f"preloaded_core_{st.session_state.get('league_id')}"
+    if not st.session_state.get(_preload_key):
+        from utils.db_utils import load_players_df, load_matches_df
+        load_players_df()
+        load_matches_df()
+        st.session_state[_preload_key] = True
+except Exception:
+    # Never block the app shell just because a preload failed; the page itself
+    # will show the real error if the DB is unavailable.
+    pass
+
 st.sidebar.success(f"League: {st.session_state.get('league_name', st.session_state['league_id'])}")
 st.sidebar.markdown("---")
 
@@ -114,12 +130,12 @@ st.sidebar.markdown("---")
 # -----------------------------
 # PLAYER LINK GATE (Step B)
 # -----------------------------
-from utils.player_link_utils import ensure_player_linked_ui
-
 role = (st.session_state.get("league_role") or "").lower()
 
-# Only force player linking for non-admins
+# Only import/run this gate for non-admins. It may query profile/player-link data,
+# so avoid doing that work for admin/owner page switching.
 if role not in ("admin", "owner"):
+    from utils.player_link_utils import ensure_player_linked_ui
     ensure_player_linked_ui()
 
 
@@ -212,5 +228,5 @@ st.sidebar.markdown("---")
 choice = st.session_state["page"]
 registry = PAGES if choice in PAGES else HIDDEN_PAGES
 module_path, func_name = registry[choice]
-mod = __import__(module_path, fromlist=[func_name])
+mod = importlib.import_module(module_path)
 getattr(mod, func_name)()

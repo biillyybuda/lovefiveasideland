@@ -8,6 +8,7 @@ import json
 import base64
 import hmac
 import hashlib
+import time
 from typing import Optional, Dict, Any
 
 import streamlit as st
@@ -19,6 +20,8 @@ from streamlit_cookies_controller import CookieController, RemoveEmptyElementCon
 
 COOKIE_KEY = "lovefive_sb_session"
 COOKIE_MAX_AGE = 30 * 24 * 60 * 60  # 30 days
+AUTH_REFRESH_GRACE_SECONDS = 50 * 60  # only refresh Supabase session about once per hour
+
 
 
 # -----------------------------
@@ -104,40 +107,60 @@ def _unpack(token: str) -> Optional[Dict[str, Any]]:
 # -----------------------------
 # Session restore
 # -----------------------------
-def _restore_session_from_cookie() -> bool:
-    """If session_state has no sb_session, try to restore from cookie."""
-    if st.session_state.get("sb_session"):
+def _restore_session_from_cookie(force: bool = False) -> bool:
+    """Restore auth from cookie only when needed.
+
+    Performance note:
+    Streamlit reruns the whole app on every click. Refreshing Supabase auth and
+    syncing the cookie component on every rerun makes the entire app feel slow.
+    This function now short-circuits when a valid session is already in
+    session_state, and only refreshes from the cookie periodically or when forced.
+    """
+    now = time.time()
+
+    sess = st.session_state.get("sb_session")
+    last_refresh = float(st.session_state.get("_lf_auth_last_refresh", 0) or 0)
+
+    # Fast path: already logged in during this Streamlit session.
+    if sess and not force and (now - last_refresh) < AUTH_REFRESH_GRACE_SECONDS:
         return True
 
+    # If we have already checked this run/session and found no cookie/session,
+    # do not keep re-rendering the cookie iframe on every rerun.
+    if not force and st.session_state.get("_lf_auth_checked") and not sess:
+        return False
+
     controller = _get_cookie_controller()
-    controller.getAll()
 
+    # Cookie component sync can be slow; do the minimum possible.
+    try:
+        token = controller.get(COOKIE_KEY)
+    except Exception:
+        token = None
 
-    # Force the cookie component to render (no rerun loop).
-    # On some hosts the first get() can be None; try twice within same run.
-    token = controller.get(COOKIE_KEY)
     if not token:
-        # Touch the component once to sync and try again
         try:
             controller.getAll()
+            token = controller.get(COOKIE_KEY)
         except Exception:
-            pass
-        token = controller.get(COOKIE_KEY)
+            token = None
 
     if not token:
+        st.session_state["_lf_auth_checked"] = True
         return False
 
     payload = _unpack(str(token))
     if not payload:
-        # Invalid cookie -> clear and force login
         try:
             controller.remove(COOKIE_KEY)
         except Exception:
             pass
+        st.session_state["_lf_auth_checked"] = True
         return False
 
     refresh_token = payload.get("refresh_token")
     if not refresh_token:
+        st.session_state["_lf_auth_checked"] = True
         return False
 
     sb = get_supabase()
@@ -152,8 +175,10 @@ def _restore_session_from_cookie() -> bool:
             "email": res.user.email,  # type: ignore
         }
         st.session_state["sb_session"] = sess
+        st.session_state["_lf_auth_checked"] = True
+        st.session_state["_lf_auth_last_refresh"] = now
 
-        # Persist rotated refresh token
+        # Persist rotated refresh token, but do not force extra cookie reads.
         _cookie_set(
             controller,
             COOKIE_KEY,
@@ -166,6 +191,8 @@ def _restore_session_from_cookie() -> bool:
             controller.remove(COOKIE_KEY)
         except Exception:
             pass
+        st.session_state.pop("sb_session", None)
+        st.session_state["_lf_auth_checked"] = True
         return False
 
 
@@ -173,6 +200,9 @@ def _restore_session_from_cookie() -> bool:
 # Public helpers used by app.py
 # -----------------------------
 def is_authed() -> bool:
+    # Hot path for normal page switching/clicking.
+    if st.session_state.get("sb_session"):
+        return True
     return _restore_session_from_cookie()
 
 
@@ -191,7 +221,6 @@ def sb_client_authed():
 def login_ui():
     sb = get_supabase()
     controller = _get_cookie_controller()
-    controller.getAll()
 
     # Web-style mode toggle
     if "auth_mode" not in st.session_state:
@@ -289,6 +318,8 @@ def logout_ui():
         st.session_state.pop("league_id", None)
         st.session_state.pop("league_name", None)
         st.session_state.pop("league_role", None)
+        st.session_state.pop("_lf_auth_checked", None)
+        st.session_state.pop("_lf_auth_last_refresh", None)
 
         # Clear cookie
         try:
