@@ -1,10 +1,39 @@
 import os, json
 from pathlib import Path
 from datetime import datetime
+import logging
+import time
 import pandas as pd
 import psycopg2
+from psycopg2 import OperationalError
 from psycopg2.pool import SimpleConnectionPool
 import streamlit as st
+
+def _load_local_env():
+    """Load ignored local DB settings when running outside Render."""
+    if os.getenv("RENDER"):
+        return
+
+    env_path = Path(".env.local")
+    if not env_path.exists():
+        return
+
+    seen_keys = set()
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = raw_line.split("=", 1)
+        key = key.strip()
+        seen_keys.add(key)
+        os.environ[key] = value
+
+    if "DATABASE_URL" not in seen_keys:
+        os.environ.pop("DATABASE_URL", None)
+
+
+_load_local_env()
 
 # -----------------------------
 # Config (keep exactly like before)
@@ -20,6 +49,13 @@ else:
 K_DEFAULT = cfg.get("k_factor", 30)
 DRAW_VALUE = cfg.get("draw_value", 0.5)
 STARTING_MMR = cfg.get("starting_mmr", 1000)
+DB_CONNECT_TIMEOUT = int(os.getenv("PGCONNECT_TIMEOUT", "5"))
+
+def _db_route_for_debug() -> str:
+    db_url = os.getenv("DATABASE_URL")
+    if db_url:
+        return "DATABASE_URL"
+    return f"{os.getenv('PGHOST', '')}:{os.getenv('PGPORT', '5432')}"
 
 # League scoping (your current league)
 def get_current_league_id() -> int:
@@ -40,7 +76,7 @@ def _connect_raw():
     """Create a real psycopg2 connection. Used only as a fallback/debug path."""
     db_url = os.getenv("DATABASE_URL")
     if db_url:
-        return psycopg2.connect(db_url, sslmode="require")
+        return psycopg2.connect(db_url, sslmode="require", connect_timeout=DB_CONNECT_TIMEOUT)
 
     host = os.getenv("PGHOST", "").strip()
     password = os.getenv("PGPASSWORD", "")
@@ -57,6 +93,7 @@ def _connect_raw():
         password=password,
         port=int(os.getenv("PGPORT", "5432")),
         sslmode="require",
+        connect_timeout=DB_CONNECT_TIMEOUT,
     )
 
 
@@ -66,9 +103,16 @@ def _connect_raw():
 @st.cache_resource
 def _get_pool():
     """Create a small Postgres connection pool per Streamlit process."""
+    logging.info("LoveFive DB route: %s", _db_route_for_debug())
     db_url = os.getenv("DATABASE_URL")
     if db_url:
-        return SimpleConnectionPool(1, 8, dsn=db_url, sslmode="require")
+        return SimpleConnectionPool(
+            1,
+            8,
+            dsn=db_url,
+            sslmode="require",
+            connect_timeout=DB_CONNECT_TIMEOUT,
+        )
 
     host = os.getenv("PGHOST", "").strip()
     password = os.getenv("PGPASSWORD", "")
@@ -87,6 +131,7 @@ def _get_pool():
         password=password,
         port=int(os.getenv("PGPORT", "5432")),
         sslmode="require",
+        connect_timeout=DB_CONNECT_TIMEOUT,
     )
 
 
@@ -134,11 +179,18 @@ class PooledConnection:
 
 def get_conn():
     """Return a pooled Postgres connection. Call .close() when finished."""
-    if str(os.getenv("LOVEFIVE_DISABLE_DB_POOL", "")).lower() in ("1", "true", "yes"):
-        return _connect_raw()
+    try:
+        if str(os.getenv("LOVEFIVE_DISABLE_DB_POOL", "")).lower() in ("1", "true", "yes"):
+            return _connect_raw()
 
-    pool = _get_pool()
-    return PooledConnection(pool, pool.getconn())
+        pool = _get_pool()
+        return PooledConnection(pool, pool.getconn())
+    except OperationalError as exc:
+        route = _db_route_for_debug()
+        raise RuntimeError(
+            f"Could not connect to the Love Five database via {route}. "
+            "Restart the local app and check .env.local if this persists."
+        ) from exc
 
 
 from contextlib import contextmanager
@@ -156,8 +208,21 @@ def pooled_conn():
 # -----------------------------
 @st.cache_data(ttl=300, show_spinner=False)
 def query_df_cached(query: str, params: tuple = ()):
+    start = time.perf_counter()
     with pooled_conn() as conn:
-        return pd.read_sql(query, conn, params=params)
+        df = pd.read_sql(query, conn, params=params)
+
+    elapsed = time.perf_counter() - start
+    if elapsed >= float(os.getenv("LOVEFIVE_SLOW_QUERY_SECONDS", "0.35")):
+        preview = " ".join(str(query).split())[:180]
+        logging.info(
+            "Slow query %.3fs rows=%s params=%s sql=%s",
+            elapsed,
+            len(df),
+            params,
+            preview,
+        )
+    return df
 
 
 # -----------------------------

@@ -146,7 +146,7 @@ def load_my_leagues():
     return league_rows
 
 
-def league_selector_ui():
+def _legacy_league_selector_ui():
     st.subheader("🏟️ Select League")
 
     leagues = load_my_leagues()
@@ -200,6 +200,102 @@ def league_selector_ui():
         st.session_state.league_name = selected["name"] # type: ignore
         st.session_state.league_role = selected.get("role") # type: ignore
         st.rerun()
+
+    return bool(st.session_state.get("league_id"))
+
+
+def _enter_league(selected: dict):
+    invalidate_app_caches()
+    st.session_state.league_id = int(selected["id"]) # type: ignore
+    st.session_state.league_name = selected["name"] # type: ignore
+    st.session_state.league_role = selected.get("role") # type: ignore
+
+
+def _join_code_form(key_prefix: str) -> bool:
+    with st.form(f"{key_prefix}_join_form", clear_on_submit=False):
+        code = st.text_input(
+            "League code",
+            placeholder="Paste the code from your organiser",
+            key=f"{key_prefix}_join_code",
+        )
+        submitted = st.form_submit_button("Join league", use_container_width=True)
+
+    if not submitted:
+        return False
+
+    if not (code or "").strip():
+        st.error("Enter the league code first.")
+        return False
+
+    result = join_league_by_code(code)
+    if not result:
+        st.error("That code does not match an active league.")
+        return False
+
+    invalidate_app_caches()
+    st.session_state.league_id = result["league_id"]
+    st.session_state.league_name = result["league_name"]
+    st.session_state.league_role = result["role"]
+    st.success(f"Joined {result['league_name']}.")
+    st.rerun()
+    return True
+
+
+def league_selector_ui():
+    st.markdown(
+        """
+        <style>
+        .lf-setup-card {
+            max-width: 560px;
+            margin: 18px auto 10px auto;
+            padding: 20px 22px;
+            border: 1px solid rgba(255,255,255,0.10);
+            border-radius: 14px;
+            background: rgba(255,255,255,0.035);
+        }
+        .lf-setup-title {
+            font-size: 1.35rem;
+            font-weight: 900;
+            text-align: center;
+            margin-bottom: 4px;
+        }
+        .lf-setup-sub {
+            color: #aab3bd;
+            text-align: center;
+            font-size: 0.95rem;
+        }
+        </style>
+        <div class="lf-setup-card">
+            <div class="lf-setup-title">Choose your league</div>
+            <div class="lf-setup-sub">Pick an existing league or join with a code from your organiser.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    leagues = load_my_leagues()
+    if not leagues:
+        st.info("No leagues are linked to your account yet.")
+        _join_code_form("first_league")
+        st.caption("Ask your league organiser for a code or invite link.")
+        return False
+
+    if len(leagues) == 1 and not st.session_state.get("league_id"):
+        _enter_league(leagues[0])
+        return True
+
+    labels = [f"{l['name']} - {l.get('role', 'member')}" for l in leagues] # type: ignore
+    with st.form("select_league_form"):
+        choice = st.selectbox("League", labels, label_visibility="collapsed")
+        submitted = st.form_submit_button("Enter league", use_container_width=True)
+
+    if submitted:
+        idx = labels.index(choice)
+        _enter_league(leagues[idx])
+        st.rerun()
+
+    with st.expander("Join another league with a code", expanded=False):
+        _join_code_form("extra_league")
 
     return bool(st.session_state.get("league_id"))
 

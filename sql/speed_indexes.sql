@@ -12,5 +12,11 @@ ON public.mmr_history (match_id);
 CREATE INDEX IF NOT EXISTS idx_mmr_history_player_id
 ON public.mmr_history (player_id);
 
+CREATE INDEX IF NOT EXISTS idx_mmr_history_player_date_id
+ON public.mmr_history (player_id, date DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_mmr_history_match_player
+ON public.mmr_history (match_id, player_id);
+
 CREATE INDEX IF NOT EXISTS idx_players_league_name
 ON public.players (league_id, name);

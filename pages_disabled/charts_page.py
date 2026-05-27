@@ -555,6 +555,105 @@ def get_name_map_cached(league_id: int) -> dict:
     return name_map
 
 @st.cache_data(ttl=300, show_spinner=False)
+def load_charts_summary_cached(league_id: int):
+    match_summary = sql_df(
+        """
+        SELECT
+            COUNT(*)::int AS processed_matches,
+            MIN(date) AS first_match,
+            MAX(date) AS last_match
+        FROM public.matches
+        WHERE processed = 1 AND league_id = %s
+        """,
+        (league_id,),
+    )
+    player_summary = sql_df(
+        "SELECT COUNT(*)::int AS players FROM public.players WHERE league_id = %s",
+        (league_id,),
+    )
+    years = sql_df(
+        """
+        SELECT DISTINCT EXTRACT(YEAR FROM date::date)::int AS year
+        FROM public.matches
+        WHERE processed = 1 AND league_id = %s AND date IS NOT NULL
+        ORDER BY year DESC
+        """,
+        (league_id,),
+    )
+    recent = sql_df(
+        """
+        SELECT date, team_a, team_b, score, result
+        FROM public.matches
+        WHERE processed = 1 AND league_id = %s
+        ORDER BY date DESC, id DESC
+        LIMIT 5
+        """,
+        (league_id,),
+    )
+    return match_summary, player_summary, years, recent
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_charts_processed_matches_cached(league_id: int) -> pd.DataFrame:
+    # Keep the heavy chart payload narrow: these views only need match identity,
+    # dates, teams and results, not every column in the matches table.
+    return sql_df(
+        """
+        SELECT id, date, team_a, team_b, score, result, processed, team_a_avg, team_b_avg
+        FROM public.matches
+        WHERE processed = 1 AND league_id = %s
+        ORDER BY date ASC, id ASC
+        """,
+        (league_id,),
+    )
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_player_mmr_history_cached(league_id: int, player_name: str) -> pd.DataFrame:
+    return sql_df(
+        """
+        SELECT
+            mh.match_id,
+            mh.date,
+            mh.mmr_before,
+            mh.mmr_after,
+            p.name
+        FROM public.mmr_history mh
+        JOIN public.players p ON mh.player_id = p.id
+        WHERE mh.league_id = %s
+          AND p.name = %s
+        ORDER BY mh.date ASC, mh.id ASC
+        """,
+        (league_id, player_name),
+    )
+
+
+def render_charts_fast_summary(league_id: int):
+    st.markdown("## Summary")
+    match_summary, player_summary, years, recent = load_charts_summary_cached(league_id)
+
+    match_row = match_summary.iloc[0].to_dict() if not match_summary.empty else {}
+    player_row = player_summary.iloc[0].to_dict() if not player_summary.empty else {}
+    year_list = [str(int(y)) for y in years["year"].dropna().tolist()] if not years.empty else []
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Processed Matches", int(match_row.get("processed_matches") or 0))
+    c2.metric("Players", int(player_row.get("players") or 0))
+    c3.metric("First Match", str(match_row.get("first_match") or "-")[:10])
+    c4.metric("Latest Match", str(match_row.get("last_match") or "-")[:10])
+
+    if year_list:
+        st.caption("Available seasons: " + ", ".join(year_list))
+
+    st.markdown("### Latest Results")
+    if recent.empty:
+        st.info("No processed matches yet.")
+    else:
+        st.dataframe(recent, use_container_width=True, hide_index=True)
+
+    st.info("Choose a detailed view above when you want the heavier charts and tables.")
+
+@st.cache_data(ttl=300, show_spinner=False)
 def load_mmr_history_cached(league_id: int) -> pd.DataFrame:
     return sql_df(
         """
@@ -749,12 +848,17 @@ def render_global_overview(suffix="", season_mode=None, selected_year=None, seas
     conn = get_conn()
     try:
         matches = matches.copy() if matches is not None else pd.read_sql(
-            "SELECT * FROM public.matches WHERE processed=1 AND league_id=%s ORDER BY date ASC",
+            """
+            SELECT id, date, team_a, team_b, score, result, processed, team_a_avg, team_b_avg
+            FROM public.matches
+            WHERE processed=1 AND league_id=%s
+            ORDER BY date ASC, id ASC
+            """,
             conn,
             params=(get_current_league_id(),),
         )
         players = sql_df(
-            "SELECT * FROM public.players WHERE league_id=%s ORDER BY name",
+            "SELECT name FROM public.players WHERE league_id=%s ORDER BY name",
             (get_current_league_id(),),
         )
 
@@ -815,6 +919,15 @@ def render_global_overview(suffix="", season_mode=None, selected_year=None, seas
         fig_att.update_yaxes(range=[0, df_att["Attendance %"].max() * 1.15 if not df_att.empty else 100])
         fig_att.update_layout(margin=dict(t=60, b=40))
         st.plotly_chart(fig_att, use_container_width=True, key=f"fig_att_global_{suffix}")
+
+        if not st.toggle(
+            "Load duo and rivalry tables",
+            value=False,
+            key=f"global_load_relationship_tables_{suffix}",
+            help="Keeps the first chart load quick online. Turn on when you want the heavier pair analysis.",
+        ):
+            st.info("Duo chemistry and rivalry tables are ready to load when needed.")
+            return
 
         # 🤝 Top 10 Duos (Chemistry) & ⚔️ Top 10 Rivalries (Intensity)
         st.subheader("🤝 Top Duos & ⚔️ Rivalries")
@@ -914,12 +1027,6 @@ def render_player_insights(suffix="", season_mode=None, selected_year=None, seas
         players = pd.read_sql("SELECT id, name FROM players WHERE league_id = %s ORDER BY name", conn, params=(get_current_league_id(),))
         matches = matches.copy() if matches is not None else load_matches_df().query("processed == 1").copy()
         league_id = get_current_league_id()
-        mmr_hist = load_mmr_history_full_cached(league_id)
-
-        mmr_hist["date_dt"] = pd.to_datetime(mmr_hist["date"], errors="coerce")
-        if season_mode == "Single Year (season reset)" and selected_year is not None:
-            mmr_hist = mmr_hist[mmr_hist["date_dt"].dt.year == int(selected_year)].copy() # type: ignore
-
 
         if matches.empty or players.empty:
             st.info("No processed matches / players found yet.")
@@ -964,7 +1071,11 @@ def render_player_insights(suffix="", season_mode=None, selected_year=None, seas
         win_pct = (win_count / total_matches * 100) if total_matches else 0.0
 
         # Player MMR history
-        df_p = mmr_hist[mmr_hist["name"] == sel_player].copy().sort_values("date", ascending=True)
+        df_p = load_player_mmr_history_cached(league_id, sel_player)
+        df_p["date_dt"] = pd.to_datetime(df_p["date"], errors="coerce")
+        if season_mode == "Single Year (season reset)" and selected_year is not None:
+            df_p = df_p[df_p["date_dt"].dt.year == int(selected_year)].copy() # type: ignore
+        df_p = df_p.sort_values("date", ascending=True)
 
         # --------------------------
         # 📊 Performance Overview (MMR + Results only)
@@ -975,6 +1086,7 @@ def render_player_insights(suffix="", season_mode=None, selected_year=None, seas
         start_mmr = None
         net_mmr_change = 0.0
         avg_mmr_delta = 0.0
+        use_season_start = None
 
         if not df_p.empty:
             if season_mode == "Single Year (season reset)" and season_start:
@@ -1550,10 +1662,27 @@ def render_charts_page():
     )
 
     league_id = get_current_league_id()
-    matches_all = sql_df(
-        "SELECT * FROM public.matches WHERE processed=1 AND league_id=%s ORDER BY date ASC",
-        (league_id,),
+    section = st.radio(
+        "View",
+        [
+            "Summary",
+            "Global Overview",
+            "Player Insights",
+            "Head-to-Head & Duo Chemistry",
+            "Teammate History",
+            "Matchup History",
+        ],
+        horizontal=True,
+        key="charts_active_section",
     )
+
+    st.divider()
+
+    if section == "Summary":
+        render_charts_fast_summary(league_id)
+        return
+
+    matches_all = load_charts_processed_matches_cached(league_id)
 
     if matches_all.empty:
         st.info("No processed matches yet.")
@@ -1563,18 +1692,21 @@ def render_charts_page():
 
     st.divider()
 
-    with st.expander("🌍 Global Overview", expanded=False):
+    if section == "Global Overview":
         render_global_overview("_exp", season_mode, selected_year, season_start, matches_filtered)
+        return
 
-    with st.expander("🎯 Player Insights", expanded=False):
+    if section == "Player Insights":
         render_player_insights("_exp", season_mode, selected_year, season_start, matches_filtered)
+        return
 
-    with st.expander("⚔️ Head-to-Head & 🤝 Duo Chemistry", expanded=False):
+    if section == "Head-to-Head & Duo Chemistry":
         render_head_to_head_section(season_mode, selected_year, season_start, matches_filtered)
+        return
     # ------------------------------
     # 📚 Teammate History (Top-level dropdown)
     # ------------------------------
-    with st.expander("📚 Teammate History", expanded=False):
+    if section == "Teammate History":
         name_map = get_name_map_cached(get_current_league_id())
 
         players_df = sql_df(
@@ -1589,12 +1721,13 @@ def render_charts_page():
             name_map,
             key_prefix="thd_main",
         )
+        return
 
 
     # ------------------------------
     # 🆚 Matchup History (Team A vs Team B)
     # ------------------------------
-    with st.expander("🆚 Matchup History", expanded=False):
+    if section == "Matchup History":
         name_map = get_name_map_cached(get_current_league_id())
 
         players_df = sql_df(
@@ -1609,3 +1742,4 @@ def render_charts_page():
             name_map,
             key_prefix="gvg_main",
         )
+        return

@@ -5,6 +5,7 @@ venv312/
 # Secrets
 .env
 .env.*
+!.env.example
 .streamlit/secrets.toml
 
 # Databases
@@ -18,3 +19,8 @@ __pycache__/
 logs/
 backups/
 Archive/
+
+# Generated repo-size / object reports
+objects.py
+sizes.txt
+sizes_sorted.txt

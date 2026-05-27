@@ -1,14 +1,18 @@
 import pandas as pd
 import streamlit as st
-from utils.calc_utils import get_conn
+from utils.db_utils import get_conn, get_current_league_id
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _processed_matches_cached() -> pd.DataFrame:
+def _processed_matches_cached(league_id: int) -> pd.DataFrame:
     """Cached processed matches used by shared stats helpers."""
     conn = get_conn()
     try:
-        return pd.read_sql("SELECT * FROM matches WHERE processed=1;", conn)
+        return pd.read_sql(
+            "SELECT * FROM matches WHERE processed=1 AND league_id=%s;",
+            conn,
+            params=(int(league_id),),
+        )
     finally:
         conn.close()
 
@@ -30,7 +34,7 @@ def get_chemistry_df(conn=None, matches_df=None):
 
     # ✅ Respect passed-in matches_df
     if matches_df is None:
-        matches_df = _processed_matches_cached()
+        matches_df = _processed_matches_cached(get_current_league_id())
 
     if matches_df is None or matches_df.empty:
         return pd.DataFrame(columns=["player_a", "player_b", "matches", "wins", "win_pct", "chemistry"])
@@ -83,7 +87,7 @@ def get_intensity_df(conn=None, matches_df=None):
         conn = get_conn()
 
     if matches_df is None:
-        matches_df = _processed_matches_cached()
+        matches_df = _processed_matches_cached(get_current_league_id())
 
     if matches_df is None or matches_df.empty:
         return pd.DataFrame(columns=["player_a", "player_b", "matches", "intensity"])
@@ -202,7 +206,7 @@ def get_pair_intensity(player_a, player_b, conn=None, df=None, matches_df=None):
         conn = get_conn()
 
     if matches_df is None:
-        matches_df = _processed_matches_cached()
+        matches_df = _processed_matches_cached(get_current_league_id())
 
     # normalise input keys
     a = str(player_a).strip().lower()

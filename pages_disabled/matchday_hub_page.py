@@ -4,6 +4,23 @@ from utils.ui_components import page_header
 
 
 def render_matchday_hub_page():
+    st.markdown(
+        """
+        <style>
+        @media (max-width: 760px){
+          div[role="radiogroup"]{
+            gap: 6px !important;
+          }
+          div[role="radiogroup"] label{
+            min-height: 42px !important;
+            padding: 7px 8px !important;
+          }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     page_header(
         "Matchday Hub",
         "Generate teams or use history to guide team selection",

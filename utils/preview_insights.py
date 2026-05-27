@@ -50,7 +50,7 @@ def _get_key_matchups(team_a, team_b, conn=None, matches_df=None):
     team_a_n = _norm_list(team_a)
     team_b_n = _norm_list(team_b)
     if matches_df is None:
-        matches_df = _processed_matches_cached()
+        matches_df = _processed_matches_for_current_league()
 
     df_rivals_all = calculate_rivalry_intensity(matches_df)
 
@@ -91,7 +91,7 @@ def _get_best_teammates(team_a, team_b, conn=None, matches_df=None):
     team_a_n = _norm_list(team_a)
     team_b_n = _norm_list(team_b)
     if matches_df is None:
-        matches_df = _processed_matches_cached()
+        matches_df = _processed_matches_for_current_league()
     df_chem_all = calculate_chemistry_for_all_duos(matches_df)
 
     # Normalise player keys for matching
@@ -139,7 +139,7 @@ def _get_best_teammates(team_a, team_b, conn=None, matches_df=None):
 # 3️⃣  Scores to Settle (Recent Meetings)
 # -------------------------------
 def _get_recent_meetings(team_a, team_b, conn=None, matches_df=None):
-    all_matches = matches_df.copy() if matches_df is not None else _processed_matches_cached().copy()
+    all_matches = matches_df.copy() if matches_df is not None else _processed_matches_for_current_league().copy()
     if "date" in all_matches.columns:
         all_matches = all_matches.sort_values("date", ascending=False)
 
@@ -205,7 +205,7 @@ def _get_recent_meetings(team_a, team_b, conn=None, matches_df=None):
 # 4️⃣  Form & Streaks (WITH DRAWS)
 # -------------------------------
 def _get_form_streaks(players, conn=None, recent_n=10, matches_df=None):
-    matches = matches_df.copy() if matches_df is not None else _processed_matches_cached().copy()
+    matches = matches_df.copy() if matches_df is not None else _processed_matches_for_current_league().copy()
     matches["date"] = pd.to_datetime(matches["date"], errors="coerce")
     matches = matches.sort_values("date", ascending=True).dropna(subset=["date"])
 
@@ -300,27 +300,44 @@ def _get_form_streaks(players, conn=None, recent_n=10, matches_df=None):
 # -------------------------------
 # 5️⃣  Match Outcome Prediction (MMR + Chemistry + Historical)
 # -------------------------------
-from utils.db_utils import get_conn as open_db
+from utils.db_utils import get_conn as open_db, get_current_league_id
 from utils.calc_utils import expected_score
 from utils.stats_shared import get_chemistry_df, get_intensity_df
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _processed_matches_cached() -> pd.DataFrame:
+def _processed_matches_cached(league_id: int) -> pd.DataFrame:
     """One cached read for match-preview insight calculations."""
     conn = open_db()
     try:
-        return pd.read_sql("SELECT date, team_a, team_b, result, score FROM matches WHERE processed=1;", conn)
+        return pd.read_sql(
+            """
+            SELECT date, team_a, team_b, result, score
+            FROM matches
+            WHERE processed=1 AND league_id=%s;
+            """,
+            conn,
+            params=(int(league_id),),
+        )
     finally:
         conn.close()
+
+
+def _processed_matches_for_current_league() -> pd.DataFrame:
+    return _processed_matches_cached(get_current_league_id())
 
 def predict_match_outcome(team_a, team_b, conn):
     """
     Blend MMR, chemistry and historical matchups to generate a match prediction.
     Returns a dict with probA, probB and text.
     """
-    players_df = pd.read_sql("SELECT name, mmr FROM players", conn)
-    matches = _processed_matches_cached()
+    league_id = get_current_league_id()
+    players_df = pd.read_sql(
+        "SELECT name, mmr FROM players WHERE league_id=%s",
+        conn,
+        params=(int(league_id),),
+    )
+    matches = _processed_matches_cached(league_id)
 
     # --- Base MMR averages
     avgA = players_df[players_df["name"].isin(team_a)]["mmr"].mean()
@@ -402,7 +419,7 @@ def generate_preview_insights(team_a, team_b, conn):
     team_b = [p.strip() for p in team_b if p.strip()]
     all_players = team_a + team_b
 
-    matches_df = _processed_matches_cached()
+    matches_df = _processed_matches_for_current_league()
 
     insights = {
         "key_matchups": _get_key_matchups(team_a, team_b, conn, matches_df=matches_df),

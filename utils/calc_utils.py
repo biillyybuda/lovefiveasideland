@@ -10,7 +10,7 @@ Fully compatible with original app logic and database.
 import math
 import pandas as pd
 import streamlit as st
-from utils.db_utils import K_DEFAULT, DRAW_VALUE, STARTING_MMR, get_conn
+from utils.db_utils import K_DEFAULT, DRAW_VALUE, STARTING_MMR, get_conn, get_current_league_id
 from psycopg2.extras import RealDictCursor
 
 def get_mmr(player_name: str, conn=None):
@@ -20,7 +20,16 @@ def get_mmr(player_name: str, conn=None):
     """
     if conn is None:
         conn = get_conn()
-    df = pd.read_sql("SELECT mmr FROM players WHERE name=%s", conn, params=(player_name,))
+    try:
+        league_id = get_current_league_id()
+    except Exception:
+        return 1000.0
+
+    df = pd.read_sql(
+        "SELECT mmr FROM players WHERE name=%s AND league_id=%s",
+        conn,
+        params=(player_name, league_id),
+    )
     if df.empty:
         return 1000.0
     return float(df["mmr"].iloc[0])
@@ -41,11 +50,17 @@ def expected_score_calibrated(r_a: float, r_b: float, scale: float = 200.0) -> f
     x = (r_a - r_b) / float(scale)
     return 1.0 / (1.0 + math.exp(-x))
 
-def calibrate_winprob_scale(default_scale: float = 200.0) -> float:
+def calibrate_winprob_scale(default_scale: float = 200.0, league_id: int | None = None) -> float:
     """
     Learn the best scale so predicted probs match real match outcomes.
     Uses matches.team_a_avg/team_b_avg saved at processing time.
     """
+    if league_id is None:
+        try:
+            league_id = get_current_league_id()
+        except Exception:
+            return float(default_scale)
+
     conn = get_conn()
     df = pd.read_sql("""
         SELECT team_a_avg, team_b_avg, result
@@ -54,7 +69,8 @@ def calibrate_winprob_scale(default_scale: float = 200.0) -> float:
           AND team_a_avg IS NOT NULL
           AND team_b_avg IS NOT NULL
           AND result IN ('A','B','Draw')
-    """, conn)
+          AND league_id = %s
+    """, conn, params=(int(league_id),))
     conn.close()
 
     if df.empty or len(df) < 12:
@@ -103,7 +119,11 @@ def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
 
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute('SELECT * FROM matches WHERE processed=0 ORDER BY date ASC')
+    league_id = get_current_league_id()
+    cur.execute(
+        'SELECT * FROM matches WHERE processed=0 AND league_id=%s ORDER BY date ASC',
+        (league_id,),
+    )
     rows = cur.fetchall()
     if not rows:
         conn.close()
@@ -114,7 +134,7 @@ def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
 
     def load_players_fresh():
         """Reload the latest player MMRs from the DB after each match update."""
-        df_players = pd.read_sql('SELECT * FROM players', conn)
+        df_players = pd.read_sql('SELECT * FROM players WHERE league_id=%s', conn, params=(league_id,))
         return {r['name']: r for _, r in df_players.iterrows()}
     import re
 
@@ -130,15 +150,15 @@ def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
         return {_norm(k): k for k in name_to_row.keys()}
 
     def _ensure_player_exists(canonical_name: str):
-        cur.execute("SELECT 1 FROM players WHERE name=%s", (canonical_name,))
+        cur.execute("SELECT 1 FROM players WHERE name=%s AND league_id=%s", (canonical_name, league_id))
         exists = cur.fetchone()
         if not exists:
             cur.execute(
                 """
-                INSERT INTO players (name, mmr, matches_played, wins, losses, draws, win_streak, lose_streak, last_match_date)
-                VALUES (%s, %s, 0, 0, 0, 0, 0, 0, NULL)
+                INSERT INTO players (league_id, name, mmr, matches_played, wins, losses, draws, win_streak, lose_streak, last_match_date)
+                VALUES (%s, %s, %s, 0, 0, 0, 0, 0, 0, NULL)
                 """,
-                (canonical_name, float(STARTING_MMR)),
+                (league_id, canonical_name, float(STARTING_MMR)),
             )
             conn.commit()
 
@@ -155,7 +175,7 @@ def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
         team_b_avg = row.get("team_b_avg")
         processed = row.get("processed")
         # 🧹 Remove any existing MMR history for this match before recalculating
-        cur.execute("DELETE FROM mmr_history WHERE match_id=%s", (mid,))
+        cur.execute("DELETE FROM mmr_history WHERE match_id=%s AND league_id=%s", (mid, league_id))
         conn.commit()
 
         # 🧩 Ensure team scores are available for goal difference checks
@@ -208,8 +228,8 @@ def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
 
         # OPTIONAL BUT STRONGLY RECOMMENDED: rewrite canonical names into matches table
         cur.execute(
-            "UPDATE matches SET team_a=%s, team_b=%s WHERE id=%s",
-            (", ".join(ta), ", ".join(tb), mid),
+            "UPDATE matches SET team_a=%s, team_b=%s WHERE id=%s AND league_id=%s",
+            (", ".join(ta), ", ".join(tb), mid, league_id),
         )
         conn.commit()
 
@@ -217,7 +237,7 @@ def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
         b_avg = sum(get_mmr(n) for n in tb) / len(tb)
 
         # Compute league mean dynamically
-        df_all = pd.read_sql('SELECT mmr FROM players', conn)
+        df_all = pd.read_sql('SELECT mmr FROM players WHERE league_id=%s', conn, params=(league_id,))
         league_mean = float(df_all['mmr'].mean()) if not df_all.empty else STARTING_MMR
 
         # Determine match result
@@ -251,8 +271,8 @@ def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
             )
 
             cur.execute(
-                'UPDATE players SET mmr=%s WHERE name=%s',
-                (after, n)
+                'UPDATE players SET mmr=%s WHERE name=%s AND league_id=%s',
+                (after, n, league_id)
             )
             histories.append((n, before, after))
 
@@ -279,8 +299,8 @@ def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
             )
 
             cur.execute(
-                'UPDATE players SET mmr=%s WHERE name=%s',
-                (after, n)
+                'UPDATE players SET mmr=%s WHERE name=%s AND league_id=%s',
+                (after, n, league_id)
             )
             histories.append((n, before, after))
 
@@ -289,7 +309,7 @@ def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
 
         # --- Update player stats
         for n in set(ta + tb):
-            cur.execute('SELECT * FROM players WHERE name=%s', (n,))
+            cur.execute('SELECT * FROM players WHERE name=%s AND league_id=%s', (n, league_id))
             r = cur.fetchone()
             if not r:
                 continue
@@ -315,31 +335,31 @@ def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
                 d += 1; ws = 0; ls = 0
 
             cur.execute(
-                'UPDATE players SET matches_played=%s, wins=%s, losses=%s, draws=%s, win_streak=%s, lose_streak=%s, last_match_date=%s WHERE name=%s',
-                (mp, w, l, d, ws, ls, mdate, n)
+                'UPDATE players SET matches_played=%s, wins=%s, losses=%s, draws=%s, win_streak=%s, lose_streak=%s, last_match_date=%s WHERE name=%s AND league_id=%s',
+                (mp, w, l, d, ws, ls, mdate, n, league_id)
             )
 
         # --- Record match MMR history (prevent duplicates)
         for n, before, after in histories:
-            cur.execute('SELECT id FROM players WHERE name=%s', (n,))
+            cur.execute('SELECT id FROM players WHERE name=%s AND league_id=%s', (n, league_id))
             prow = cur.fetchone()
             pid = int(prow["id"]) if prow and prow.get("id") is not None else None
 
             # remove any existing duplicate entries first
             cur.execute(
-                "DELETE FROM mmr_history WHERE player_id=%s AND match_id=%s",
-                (pid, mid)
+                "DELETE FROM mmr_history WHERE player_id=%s AND match_id=%s AND league_id=%s",
+                (pid, mid, league_id)
             )
 
             # insert fresh history record
             cur.execute(
-                'INSERT INTO mmr_history (player_id, match_id, date, mmr_before, mmr_after) VALUES (%s,%s,%s,%s,%s)',
-                (pid, mid, mdate, before, after)
+                'INSERT INTO mmr_history (league_id, player_id, match_id, date, mmr_before, mmr_after) VALUES (%s,%s,%s,%s,%s,%s)',
+                (league_id, pid, mid, mdate, before, after)
             )
 
         # --- Mark match as processed
-        cur.execute('UPDATE matches SET processed=1, team_a_avg=%s, team_b_avg=%s WHERE id=%s',
-                    (a_avg, b_avg, mid))
+        cur.execute('UPDATE matches SET processed=1, team_a_avg=%s, team_b_avg=%s WHERE id=%s AND league_id=%s',
+                    (a_avg, b_avg, mid, league_id))
         conn.commit()
         processed_count += 1
 
@@ -357,6 +377,7 @@ def reset_and_reprocess_season():
     """
     conn = get_conn()
     cur = conn.cursor()
+    league_id = get_current_league_id()
 
     # Reset player MMR + season stats
     cur.execute("""
@@ -369,10 +390,11 @@ def reset_and_reprocess_season():
             win_streak = 0,
             lose_streak = 0,
             last_match_date = NULL
-    """, (STARTING_MMR,))
+        WHERE league_id = %s
+    """, (STARTING_MMR, league_id))
 
     # Clear MMR history
-    cur.execute("DELETE FROM mmr_history")
+    cur.execute("DELETE FROM mmr_history WHERE league_id = %s", (league_id,))
 
     # Unprocess all matches + clear stored avgs (optional but nice)
     cur.execute("""
@@ -380,7 +402,8 @@ def reset_and_reprocess_season():
         SET processed = 0,
             team_a_avg = NULL,
             team_b_avg = NULL
-    """)
+        WHERE league_id = %s
+    """, (league_id,))
 
     conn.commit()
     conn.close()

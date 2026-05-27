@@ -137,17 +137,22 @@ def _current_league_id_or_none() -> Optional[int]:
 def _read_optional_table(conn, table_name: str, columns: str = "*") -> pd.DataFrame:
     """Best-effort table reader. If a legacy/dev DB lacks the table, return empty."""
     league_id = _current_league_id_or_none()
+    if league_id is None:
+        return pd.DataFrame()
+
     try:
-        if league_id is not None:
+        return pd.read_sql(
+            f"SELECT {columns} FROM public.{table_name} WHERE league_id = %s",
+            conn,
+            params=(league_id,),
+        )
+    except Exception:
+        try:
             return pd.read_sql(
-                f"SELECT {columns} FROM public.{table_name} WHERE league_id = %s",
+                f"SELECT {columns} FROM {table_name} WHERE league_id = %s",
                 conn,
                 params=(league_id,),
             )
-        return pd.read_sql(f"SELECT {columns} FROM public.{table_name}", conn)
-    except Exception:
-        try:
-            return pd.read_sql(f"SELECT {columns} FROM {table_name}", conn)
         except Exception:
             return pd.DataFrame()
 
@@ -329,7 +334,9 @@ def _load_db_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Data
     league_id = _current_league_id_or_none()
 
     try:
-        if league_id is not None:
+        if league_id is None:
+            matches = pd.DataFrame(columns=["id", "date", "team_a", "team_b", "result", "score"])
+        else:
             matches = pd.read_sql(
                 """
                 SELECT id, date, team_a, team_b, result, score
@@ -340,27 +347,18 @@ def _load_db_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Data
                 conn,
                 params=(league_id,),
             )
-        else:
-            matches = pd.read_sql(
-                """
-                SELECT id, date, team_a, team_b, result, score
-                FROM matches
-                WHERE result IN ('A','B','Draw','D','DRAW')
-                """,
-                conn,
-            )
     except Exception:
         matches = pd.DataFrame(columns=["id", "date", "team_a", "team_b", "result", "score"])
 
     try:
-        if league_id is not None:
+        if league_id is None:
+            players = pd.DataFrame(columns=["id", "name", "mmr", "fitness"])
+        else:
             players = pd.read_sql(
                 "SELECT id, name, mmr, fitness FROM public.players WHERE league_id = %s;",
                 conn,
                 params=(league_id,),
             )
-        else:
-            players = pd.read_sql("SELECT id, name, mmr, fitness FROM players;", conn)
     except Exception:
         players = pd.DataFrame(columns=["id", "name", "mmr", "fitness"])
 
@@ -643,6 +641,12 @@ def get_engine_state(force_reload: bool = False) -> Dict[str, Any]:
     if _ENGINE_CACHE is None or force_reload:
         _ENGINE_CACHE = _build_engine_state()
     return _ENGINE_CACHE
+
+
+def clear_engine_cache() -> None:
+    """Drop the in-memory AI state after match/player data changes."""
+    global _ENGINE_CACHE
+    _ENGINE_CACHE = None
 
 
 def _effective_mmr(name: str, state: Dict[str, Any]) -> float:
@@ -1354,6 +1358,471 @@ def evaluate_teams_v2(team_a: List[str], team_b: List[str]) -> Tuple[float, Dict
 
     return float(v2_score), breakdown
 
+
+# -----------------------------
+# Matchday Hub decision helpers
+# -----------------------------
+
+def _clamp_float(x: Any, lo: float, hi: float, default: float = 0.0) -> float:
+    try:
+        v = float(x)
+        if math.isnan(v):
+            return default
+        return max(lo, min(hi, v))
+    except Exception:
+        return default
+
+
+def _sigmoid(x: float) -> float:
+    x = max(-30.0, min(30.0, float(x)))
+    return 1.0 / (1.0 + math.exp(-x))
+
+
+def matchup_recommendation_score(
+    score: float,
+    breakdown: Dict[str, Any],
+    quality_interp: Optional[Dict[str, Any]] = None,
+) -> Dict[str, float]:
+    """Return one clear 0-100 ranking score for generated matchups.
+
+    MMR stays the anchor. The other signals are deliberately smaller nudges:
+    expected margin, close-game chance, spread, chemistry, bad pairs and recent
+    matchup memory. This keeps the model useful without overfitting one or two
+    noisy historical links.
+    """
+    interp = dict(quality_interp or {})
+    mmr_diff = _clamp_float(breakdown.get("mmr_diff", 0.0), 0.0, 500.0)
+    spread_diff = _clamp_float(breakdown.get("spread_diff", 0.0), 0.0, 500.0)
+    chem_diff = _clamp_float(breakdown.get("chem_diff", 0.0), 0.0, 500.0)
+    trio_diff = _clamp_float(breakdown.get("trio_diff", 0.0), 0.0, 500.0)
+    bad_total = _clamp_float(breakdown.get("badpair_total", 0.0), 0.0, 100.0)
+    sim_pen = _clamp_float(breakdown.get("similarity_penalty", 0.0), 0.0, 100.0)
+    style_net = _clamp_float(breakdown.get("style_net", 0.0), -20.0, 20.0)
+
+    margin = breakdown.get("v2_predicted_margin", interp.get("typical_margin", None))
+    close = breakdown.get("v2_close_pct", interp.get("close_pct", None))
+    quality = breakdown.get("v2_quality", interp.get("quality", None))
+
+    margin = _clamp_float(margin, 0.0, 12.0, default=6.0)
+    close = _clamp_float(close, 0.0, 100.0, default=45.0)
+    quality = _clamp_float(quality, 0.0, 100.0, default=45.0)
+
+    mmr_component = max(0.0, 100.0 - (mmr_diff * 1.35))
+    margin_component = max(0.0, 100.0 - max(0.0, margin - 1.4) * 20.0)
+    shape_component = max(0.0, 100.0 - (spread_diff * 0.45) - (chem_diff * 0.22) - (trio_diff * 0.08))
+    memory_component = max(0.0, 100.0 - (bad_total * 6.0) - (sim_pen * 7.0) - max(0.0, style_net) * 8.0)
+
+    recommendation = (
+        (mmr_component * 0.34)
+        + (margin_component * 0.24)
+        + (close * 0.18)
+        + (shape_component * 0.14)
+        + (memory_component * 0.06)
+        + (quality * 0.04)
+    )
+    recommendation = _clamp_float(recommendation, 0.0, 100.0)
+
+    return {
+        "recommendation_score": float(recommendation),
+        "mmr_component": float(mmr_component),
+        "margin_component": float(margin_component),
+        "shape_component": float(shape_component),
+        "memory_component": float(memory_component),
+        "close_component": float(close),
+        "quality_component": float(quality),
+        "predicted_margin": float(margin),
+        "close_pct": float(close),
+        "raw_score": float(score),
+    }
+
+
+def rank_generated_matchups(candidates: List[Any]) -> List[Dict[str, Any]]:
+    """Rank generated splits best-first while preserving the original payload.
+
+    Accepted input is either dictionaries or tuples shaped like
+    (score, A, B, breakdown, quality_interp). The Streamlit page uses the dict
+    output so it can show the rank, explanation and explorer table consistently.
+    """
+    ranked: List[Dict[str, Any]] = []
+    for idx, item in enumerate(candidates):
+        if isinstance(item, dict):
+            score = float(item.get("score", 0.0) or 0.0)
+            team_a = list(item.get("A", item.get("team_a", [])) or [])
+            team_b = list(item.get("B", item.get("team_b", [])) or [])
+            breakdown = dict(item.get("breakdown") or {})
+            interp = dict(item.get("quality_interp") or {})
+        else:
+            try:
+                score, team_a, team_b, breakdown, interp = item[:5]
+                score = float(score or 0.0)
+                team_a = list(team_a or [])
+                team_b = list(team_b or [])
+                breakdown = dict(breakdown or {})
+                interp = dict(interp or {})
+            except Exception:
+                continue
+
+        ranking = matchup_recommendation_score(score, breakdown, interp)
+        interp.update(ranking)
+        ranked.append({
+            "source_index": idx,
+            "score": score,
+            "A": team_a,
+            "B": team_b,
+            "breakdown": breakdown,
+            "quality_interp": interp,
+            "ranking": ranking,
+        })
+
+    ranked.sort(
+        key=lambda r: (
+            -float(r["ranking"].get("recommendation_score", 0.0)),
+            float(r["ranking"].get("predicted_margin", 99.0)),
+            float(r["breakdown"].get("mmr_diff", 999.0)),
+            float(r["score"]),
+        )
+    )
+    for i, row in enumerate(ranked, 1):
+        row["rank"] = i
+    return ranked
+
+
+def explain_matchup_plain_english(
+    team_a: List[str],
+    team_b: List[str],
+    breakdown: Dict[str, Any],
+    quality_interp: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Plain-English explanation for captains and WhatsApp sharing."""
+    interp = dict(quality_interp or {})
+    ranking = matchup_recommendation_score(float(breakdown.get("v2_score", 0.0) or 0.0), breakdown, interp)
+
+    mmr_diff = _clamp_float(breakdown.get("mmr_diff", 0.0), 0.0, 500.0)
+    spread_diff = _clamp_float(breakdown.get("spread_diff", 0.0), 0.0, 500.0)
+    chem_diff = _clamp_float(breakdown.get("chem_diff", 0.0), 0.0, 500.0)
+    trio_diff = _clamp_float(breakdown.get("trio_diff", 0.0), 0.0, 500.0)
+    bad_total = _clamp_float(breakdown.get("badpair_total", 0.0), 0.0, 100.0)
+    sim_pen = _clamp_float(breakdown.get("similarity_penalty", 0.0), 0.0, 100.0)
+    margin = ranking["predicted_margin"]
+    close = ranking["close_pct"]
+
+    positives: List[str] = []
+    cautions: List[str] = []
+
+    if mmr_diff <= 8:
+        positives.append("The ratings are very close, so neither side should start as a clear favourite.")
+    elif mmr_diff <= 18:
+        positives.append("The ratings lean slightly one way, but still look playable.")
+    else:
+        cautions.append("The MMR gap is noticeable, so the stronger side may control spells of the game.")
+
+    if margin <= 2.0:
+        positives.append("The model expects a tight scoreline rather than a runaway game.")
+    elif margin >= 4.5:
+        cautions.append("The expected margin is a bit wide for a perfect matchup.")
+
+    if spread_diff <= 8:
+        positives.append("The team shapes look similar, without one side relying too much on a single carry.")
+    elif spread_diff >= 16:
+        cautions.append("The team shapes are uneven, so one side may feel more top-heavy.")
+
+    if chem_diff <= 5:
+        positives.append("Chemistry is balanced enough that both teams should have passing options.")
+    elif chem_diff >= 12:
+        cautions.append("One team has a stronger proven chemistry base.")
+
+    if trio_diff >= 18:
+        cautions.append("There is a trio-synergy swing in the matchup, so one group may click quicker.")
+
+    if bad_total >= 2.5:
+        cautions.append("There are one or two historically awkward pairings in the teams.")
+
+    if sim_pen > 0:
+        cautions.append("A very similar past game was one-sided, so the model is treating this with caution.")
+
+    if close >= 62:
+        positives.append("Past data and the fallback model both point towards a strong close-game chance.")
+
+    if not positives:
+        positives.append("The split is solid rather than flashy, with no single signal doing all the work.")
+    if not cautions:
+        cautions.append("No obvious red flag, just normal five-a-side chaos to survive.")
+
+    headline = (
+        f"Best read: {ranking['recommendation_score']:.0f}/100 matchup, "
+        f"around {margin:.1f} goals either way, {close:.0f}% tight-game chance."
+    )
+
+    return {
+        "headline": headline,
+        "positives": positives[:4],
+        "cautions": cautions[:4],
+        "ranking": ranking,
+        "whatsapp": [
+            headline,
+            "Team A: " + ", ".join(team_a),
+            "Team B: " + ", ".join(team_b),
+            "Why it works: " + "; ".join(positives[:2]),
+            "Watch out: " + "; ".join(cautions[:2]),
+        ],
+    }
+
+
+def _pair_change_rows(now_team: List[str], hist_team: List[str]) -> List[Dict[str, str]]:
+    now_keys = {clean_name(p) for p in now_team}
+    hist_keys = {clean_name(p) for p in hist_team}
+    incoming = [p for p in now_team if clean_name(p) not in hist_keys]
+    missing = [p for p in hist_team if clean_name(p) not in now_keys]
+    rows: List[Dict[str, str]] = []
+    for i in range(max(len(incoming), len(missing))):
+        rows.append({
+            "out": missing[i] if i < len(missing) else "",
+            "in": incoming[i] if i < len(incoming) else "",
+        })
+    return rows
+
+
+def closest_historical_matchups(
+    team_a: List[str],
+    team_b: List[str],
+    top_n: int = 3,
+    min_side_overlap: int = 2,
+) -> List[Dict[str, Any]]:
+    """Closest past games to today's teams, including replacements and scores."""
+    state = get_engine_state(force_reload=False)
+    matches = state.get("matches")
+    if matches is None or not isinstance(matches, pd.DataFrame) or matches.empty:
+        return []
+
+    a_now = {clean_name(p) for p in team_a if clean_name(p)}
+    b_now = {clean_name(p) for p in team_b if clean_name(p)}
+    if not a_now or not b_now:
+        return []
+
+    df = matches.copy()
+    if "date" in df.columns:
+        df["__dt"] = pd.to_datetime(df["date"], errors="coerce")
+    else:
+        df["__dt"] = pd.NaT
+
+    rows: List[Dict[str, Any]] = []
+    for _, r in df.iterrows():
+        hist_a_raw = _split_team(r.get("team_a", ""))
+        hist_b_raw = _split_team(r.get("team_b", ""))
+        hist_a = {clean_name(p) for p in hist_a_raw if clean_name(p)}
+        hist_b = {clean_name(p) for p in hist_b_raw if clean_name(p)}
+        if len(hist_a) < 3 or len(hist_b) < 3:
+            continue
+
+        oa1, ob1 = len(a_now & hist_a), len(b_now & hist_b)
+        oa2, ob2 = len(a_now & hist_b), len(b_now & hist_a)
+        same_score, swap_score = oa1 + ob1, oa2 + ob2
+        if swap_score > same_score:
+            orient = "swapped"
+            overlap_a, overlap_b = oa2, ob2
+            aligned_a_raw, aligned_b_raw = hist_b_raw, hist_a_raw
+        else:
+            orient = "same"
+            overlap_a, overlap_b = oa1, ob1
+            aligned_a_raw, aligned_b_raw = hist_a_raw, hist_b_raw
+
+        overlap_total = overlap_a + overlap_b
+        if overlap_total < 5 or min(overlap_a, overlap_b) < min_side_overlap:
+            continue
+
+        g_a, g_b = _parse_score(r.get("score", ""))
+        if g_a is not None and g_b is not None and orient == "swapped":
+            shown_score = f"{g_b}-{g_a}"
+            signed_margin = float(g_b - g_a)
+        elif g_a is not None and g_b is not None:
+            shown_score = f"{g_a}-{g_b}"
+            signed_margin = float(g_a - g_b)
+        else:
+            shown_score = str(r.get("score", "") or "")
+            signed_margin = 0.0
+
+        similarity = (overlap_total / 10.0 * 0.75) + (min(overlap_a, overlap_b) / 5.0 * 0.25)
+        rows.append({
+            "match_id": r.get("id", None),
+            "date": r.get("date", None),
+            "__dt": r.get("__dt", pd.NaT),
+            "scoreline": shown_score,
+            "signed_margin": float(signed_margin),
+            "abs_margin": abs(float(signed_margin)),
+            "result": str(r.get("result", "") or ""),
+            "orientation": orient,
+            "similarity": float(similarity),
+            "overlap_total": int(overlap_total),
+            "overlap_a": int(overlap_a),
+            "overlap_b": int(overlap_b),
+            "hist_team_a": aligned_a_raw,
+            "hist_team_b": aligned_b_raw,
+            "team_a_changes": _pair_change_rows(team_a, aligned_a_raw),
+            "team_b_changes": _pair_change_rows(team_b, aligned_b_raw),
+        })
+
+    rows.sort(
+        key=lambda x: (
+            float(x["similarity"]),
+            int(x["overlap_total"]),
+            -float(x["abs_margin"]),
+            pd.Timestamp(x["__dt"]).timestamp() if pd.notna(x["__dt"]) else 0.0,
+        ),
+        reverse=True,
+    )
+    for row in rows:
+        row.pop("__dt", None)
+    return rows[: max(0, int(top_n))]
+
+
+def find_best_tweaks(team_a: List[str], team_b: List[str], max_suggestions: int = 3) -> Dict[str, Any]:
+    """Try every one-for-one swap and return useful improvements, if any."""
+    if not team_a or not team_b:
+        return {"suggestions": [], "message": "No obvious improvement found."}
+
+    eval_a = [clean_name(p) for p in team_a]
+    eval_b = [clean_name(p) for p in team_b]
+    current_score, current_breakdown = evaluate_teams_v2(eval_a, eval_b)
+    current_rank = matchup_recommendation_score(current_score, current_breakdown)
+    current_rec = float(current_rank["recommendation_score"])
+
+    suggestions: List[Dict[str, Any]] = []
+    for a in team_a:
+        for b in team_b:
+            new_a = [b if p == a else p for p in team_a]
+            new_b = [a if p == b else p for p in team_b]
+            new_score, new_breakdown = evaluate_teams_v2([clean_name(p) for p in new_a], [clean_name(p) for p in new_b])
+            new_rank = matchup_recommendation_score(new_score, new_breakdown)
+            rec_gain = float(new_rank["recommendation_score"]) - current_rec
+            score_gain = float(current_score) - float(new_score)
+
+            if rec_gain < 1.0 and score_gain < 0.08:
+                continue
+
+            reasons: List[str] = []
+            for label, key, threshold in (
+                ("MMR gap", "mmr_diff", 1.0),
+                ("team-shape gap", "spread_diff", 1.0),
+                ("chemistry gap", "chem_diff", 1.5),
+                ("expected margin", "v2_predicted_margin", 0.2),
+                ("matchup-memory risk", "similarity_penalty", 0.5),
+            ):
+                before = _clamp_float(current_breakdown.get(key, 0.0), -999.0, 999.0)
+                after = _clamp_float(new_breakdown.get(key, 0.0), -999.0, 999.0)
+                if before - after >= threshold:
+                    reasons.append(f"lowers the {label}")
+
+            if not reasons:
+                reasons.append("nudges the overall game balance up")
+
+            suggestions.append({
+                "swap_a": a,
+                "swap_b": b,
+                "new_team_a": new_a,
+                "new_team_b": new_b,
+                "score_gain": float(score_gain),
+                "recommendation_gain": float(rec_gain),
+                "new_score": float(new_score),
+                "new_breakdown": new_breakdown,
+                "reason": ", ".join(reasons[:3]),
+            })
+
+    suggestions.sort(key=lambda x: (x["recommendation_gain"], x["score_gain"]), reverse=True)
+    suggestions = suggestions[: max(0, int(max_suggestions))]
+    message = "No obvious improvement found. This split is already close enough to trust." if not suggestions else ""
+    return {
+        "current_score": float(current_score),
+        "current_recommendation": float(current_rec),
+        "suggestions": suggestions,
+        "message": message,
+    }
+
+
+def blend_market_probabilities(
+    team_a: List[str],
+    team_b: List[str],
+    base_probs: Optional[Tuple[float, float, float]] = None,
+) -> Dict[str, Any]:
+    """Blend betting-style 1X2 probabilities with model context.
+
+    The existing scoreline model supplies the base price. This layer adds
+    conservative nudges from effective MMR/form, chemistry, trio synergy, bad
+    pairings and the closest historical scorelines. The weights are capped so
+    small samples can inform the odds without hijacking them.
+    """
+    state = get_engine_state(force_reload=False)
+    eval_a = [clean_name(p) for p in team_a]
+    eval_b = [clean_name(p) for p in team_b]
+    _, breakdown = _evaluate_with_state(eval_a, eval_b, state)
+
+    if base_probs is None:
+        base_a, base_d, base_b = 0.45, 0.10, 0.45
+    else:
+        try:
+            base_a, base_d, base_b = [max(0.001, float(x)) for x in base_probs]
+        except Exception:
+            base_a, base_d, base_b = 0.45, 0.10, 0.45
+
+    base_sum = max(0.001, base_a + base_d + base_b)
+    base_a, base_d, base_b = base_a / base_sum, base_d / base_sum, base_b / base_sum
+    base_adv = base_a / max(0.001, base_a + base_b)
+
+    mmr_edge = float(breakdown.get("mmr_avg_a", 0.0) or 0.0) - float(breakdown.get("mmr_avg_b", 0.0) or 0.0)
+    mmr_adv = _sigmoid(mmr_edge / 165.0)
+
+    chem_edge = (
+        (float(breakdown.get("chem_a", 0.0) or 0.0) - float(breakdown.get("chem_b", 0.0) or 0.0)) / 90.0
+        + (float(breakdown.get("trio_a", 0.0) or 0.0) - float(breakdown.get("trio_b", 0.0) or 0.0)) / 140.0
+        - (float(breakdown.get("badpair_a", 0.0) or 0.0) - float(breakdown.get("badpair_b", 0.0) or 0.0)) / 10.0
+    )
+    shape_adv = _sigmoid((mmr_edge / 260.0) + chem_edge)
+
+    closest = closest_historical_matchups(team_a, team_b, top_n=8, min_side_overlap=2)
+    hist_rows: List[Tuple[float, float]] = []
+    for m in closest:
+        sim = _clamp_float(m.get("similarity", 0.0), 0.0, 1.0)
+        signed = _clamp_float(m.get("signed_margin", 0.0), -12.0, 12.0)
+        if sim <= 0:
+            continue
+        hist_rows.append((_sigmoid(signed / 2.7), sim ** 2.0))
+
+    hist_conf = 0.0
+    hist_adv = 0.5
+    if hist_rows:
+        total_w = sum(w for _, w in hist_rows)
+        hist_adv = sum(v * w for v, w in hist_rows) / max(0.001, total_w)
+        avg_sim = total_w / max(1, len(hist_rows))
+        hist_conf = min(0.28, (len(hist_rows) / 10.0) * avg_sim)
+
+    w_base = 0.40
+    w_mmr = 0.34
+    w_shape = 0.16
+    w_hist = hist_conf
+    total_w = w_base + w_mmr + w_shape + w_hist
+    adv = ((base_adv * w_base) + (mmr_adv * w_mmr) + (shape_adv * w_shape) + (hist_adv * w_hist)) / total_w
+    adv = _clamp_float(adv, 0.08, 0.92, default=0.5)
+
+    margin = _clamp_float(breakdown.get("v2_predicted_margin", breakdown.get("mmr_diff", 0.0) / 18.0), 0.0, 10.0)
+    closeness = max(0.0, 1.0 - min(1.0, margin / 6.0))
+    draw = (base_d * 0.65) + ((0.06 + 0.16 * closeness) * 0.35)
+    draw = _clamp_float(draw, 0.04, 0.26, default=0.10)
+
+    p_a = (1.0 - draw) * adv
+    p_b = (1.0 - draw) * (1.0 - adv)
+    return {
+        "pA": float(p_a),
+        "pDraw": float(draw),
+        "pB": float(p_b),
+        "history_confidence": float(hist_conf),
+        "history_matches": int(len(closest)),
+        "notes": {
+            "base_adv": float(base_adv),
+            "mmr_adv": float(mmr_adv),
+            "shape_adv": float(shape_adv),
+            "history_adv": float(hist_adv),
+        },
+    }
+
 # -----------------------------
 # True pre-match fairness calibration (no leakage)
 # -----------------------------
@@ -1390,17 +1859,32 @@ def build_true_fairness_calibration(
     - Rebuilds form + duo + trio stats in a rolling manner (no future leakage).
     """
     conn = get_conn()
+    league_id = _current_league_id_or_none()
+    if league_id is None:
+        conn.close()
+        return pd.DataFrame(columns=["fairness_pre", "goal_diff", "is_close", "date"])
+
     try:
         matches = pd.read_sql(
-            "SELECT id, date, team_a, team_b, result, score FROM matches WHERE result IN ('A','B','Draw','D');",
+            """
+            SELECT id, date, team_a, team_b, result, score
+            FROM matches
+            WHERE league_id = %s
+              AND result IN ('A','B','Draw','D')
+            """,
             conn,
+            params=(league_id,),
         )
     except Exception:
         conn.close()
         return pd.DataFrame(columns=["fairness_pre", "goal_diff", "is_close", "date"])
 
     try:
-        players = pd.read_sql("SELECT id, name, fitness FROM players;", conn)
+        players = pd.read_sql(
+            "SELECT id, name, fitness FROM players WHERE league_id = %s;",
+            conn,
+            params=(league_id,),
+        )
     except Exception:
         players = pd.DataFrame(columns=["name", "fitness"])
 
@@ -1408,14 +1892,16 @@ def build_true_fairness_calibration(
     mmr_hist = None
     try:
         mmr_hist = pd.read_sql(
-            "SELECT match_id, player_id, mmr_before FROM mmr_history;",
+            "SELECT match_id, player_id, mmr_before FROM mmr_history WHERE league_id = %s;",
             conn,
+            params=(league_id,),
         )
     except Exception:
         try:
             mmr_hist = pd.read_sql(
-                "SELECT match_id, player_name, mmr_before FROM mmr_history;",
+                "SELECT match_id, player_name, mmr_before FROM mmr_history WHERE league_id = %s;",
                 conn,
+                params=(league_id,),
             )
         except Exception:
             mmr_hist = None

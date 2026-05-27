@@ -41,6 +41,10 @@ def calculate_chemistry_for_all_duos(matches_df: pd.DataFrame):
     if matches_df is None or matches_df.empty:
         return pd.DataFrame()
 
+    # Work on a copy because the same match DataFrame is reused by charts,
+    # previews and AI scoring in the same Streamlit run.
+    matches_df = matches_df.copy()
+
     # --- Auto-fix for stringified lists like "['Billy', 'Gav']"
     def _safe_list_convert(x):
         if isinstance(x, list):

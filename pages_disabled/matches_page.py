@@ -2,31 +2,71 @@ import streamlit as st
 from utils.cache_utils import invalidate_app_caches
 import pandas as pd
 from datetime import datetime
-from utils.db_utils import load_players_df, load_matches_df, get_conn, backup_db_manual, STARTING_MMR
+from utils.db_utils import load_players_df, load_matches_df, get_conn, get_current_league_id, backup_db_manual, STARTING_MMR
 from utils.calc_utils import expected_score, process_unprocessed_matches, compute_streaks_from_matches, reset_and_reprocess_season
 from utils.export_utils import df_to_png, fig_to_png_bytes
 from utils.ui_components import page_header
 
-players_df = load_players_df()
-
-# Build canonical -> display map
-name_map = dict(
-    zip(
-        players_df["name"],
-        players_df.get("display_name", players_df["name"])
-    )
-)
-
-# Fallback if display_name is blank
-for k, v in name_map.items():
-    if not v or str(v).strip() == "":
-        name_map[k] = k.replace("_", " ").title()
+def _parse_score_pair(score_text: str):
+    parts = str(score_text or "").replace("-", " ").replace("–", " ").split()
+    nums = [int(x) for x in parts if str(x).isdigit()]
+    if len(nums) != 2:
+        return None
+    return nums[0], nums[1]
 
 
+def _result_from_score(score_text: str) -> str:
+    parsed = _parse_score_pair(score_text)
+    if not parsed:
+        return ""
+    a, b = parsed
+    if a > b:
+        return "A"
+    if b > a:
+        return "B"
+    return "Draw"
 
 def render_matches_page():
-    page_header("Matches Management", "Add, edit and process matches", center=True, divider=True)
+    page_header("Matches Management", "Add results and manage match history", center=True, divider=True)
+    role = (st.session_state.get("league_role") or "").lower()
+    if role not in ("admin", "owner"):
+        st.warning("Only league admins can add, edit, delete, or process match results.")
+        if st.button("Back to Home", use_container_width=True):
+            st.session_state["_nav_target"] = "Home"
+            st.rerun()
+        st.stop()
+
+    st.markdown(
+        """
+        <style>
+        @media (max-width: 760px){
+          .matches-mobile-note{
+            font-size: 0.88rem;
+            color: #aab3bd;
+            text-align: center;
+            margin-bottom: 8px;
+          }
+        }
+        </style>
+        <div class="matches-mobile-note">Tip: enter the score as 10-8 and leave result on auto.</div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.markdown("<div class='stCard'>", unsafe_allow_html=True)
+
+    league_id = get_current_league_id()
+    players_df = load_players_df()
+
+    # Build canonical -> display map lazily for the selected league.
+    name_map = dict(
+        zip(
+            players_df["name"],
+            players_df.get("display_name", players_df["name"])
+        )
+    )
+    for k, v in name_map.items():
+        if not v or str(v).strip() == "":
+            name_map[k] = k.replace("_", " ").title()
 
     display_to_canonical = {v: k for k, v in name_map.items()}
     canonical_to_display = {k: v for k, v in name_map.items()}
@@ -60,10 +100,11 @@ def render_matches_page():
         columns=[c for c in ["team_a_color", "team_b_color"] if c in dfm_view.columns],
         errors="ignore",
     )
-    st.dataframe(dfm_view, use_container_width=True)
+    with st.expander("Match history", expanded=False):
+        st.dataframe(dfm_view, use_container_width=True)
 
     # --- Add / Edit / Delete Matches ---
-    st.markdown('### Add a new match')
+    st.markdown('### Add match result')
     with st.form(key='add_match_form'):
         m_date = st.date_input('Date', value=datetime.today())
         display_to_canonical = {v: k for k, v in name_map.items()}
@@ -71,13 +112,13 @@ def render_matches_page():
         display_names = sorted(display_to_canonical.keys())
 
         team_a_disp = st.multiselect(
-            "Team A players (comma separate or multiselect)",
+            "Team A players",
             display_names,
             key="add_team_a",
         )
 
         team_b_disp = st.multiselect(
-            "Team B players (comma separate or multiselect)",
+            "Team B players",
             display_names,
             key="add_team_b",
         )
@@ -85,23 +126,29 @@ def render_matches_page():
         team_a_sel = [display_to_canonical[d] for d in team_a_disp]
         team_b_sel = [display_to_canonical[d] for d in team_b_disp]
         score_in = st.text_input('Score (e.g. 10-8)', value='', key='add_score')
-        result_in = st.selectbox('Result', options=['', 'A', 'B', 'Draw'], index=0)
+        result_in = st.selectbox('Result', options=['Auto from score', 'A', 'B', 'Draw'], index=0)
         submitted = st.form_submit_button('Save Match')
 
     if submitted:
+        inferred_result = _result_from_score(score_in)
+        final_result = inferred_result if result_in == "Auto from score" else result_in
         if not team_a_sel or not team_b_sel:
             st.warning('Select at least one player per team.')
         elif set(team_a_sel) & set(team_b_sel):
             st.error('A player appears in both teams.')
+        elif not _parse_score_pair(score_in):
+            st.error('Enter the score like 10-8.')
+        elif not final_result:
+            st.error('Choose a result or enter a valid score so the app can work it out.')
         else:
             conn = get_conn()
             cur = conn.cursor()
             cur.execute(
                 """
-                INSERT INTO matches (date, team_a, team_b, score, result, processed)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO matches (league_id, date, team_a, team_b, score, result, processed)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
-                (m_date.isoformat(), ", ".join(team_a_sel), ", ".join(team_b_sel), score_in, result_in, 0)
+                (league_id, m_date.isoformat(), ", ".join(team_a_sel), ", ".join(team_b_sel), score_in, final_result, 0)
             )
             conn.commit()
             conn.close()
@@ -123,8 +170,12 @@ def render_matches_page():
             conn = get_conn()
             cur = conn.cursor()
             cur.execute(
-                "SELECT id, date, team_a, team_b, score, result, processed FROM matches WHERE id=%s",
-                (int(sel_id),)
+                """
+                SELECT id, date, team_a, team_b, score, result, processed
+                FROM matches
+                WHERE id=%s AND league_id=%s
+                """,
+                (int(sel_id), league_id)
             )
             row = cur.fetchone()
             conn.close()
@@ -189,7 +240,7 @@ def render_matches_page():
                             """
                             UPDATE matches
                             SET date=%s, team_a=%s, team_b=%s, score=%s, result=%s, processed=%s
-                            WHERE id=%s
+                            WHERE id=%s AND league_id=%s
                             """,
                             (
                                 ed_date_in.isoformat(),
@@ -199,6 +250,7 @@ def render_matches_page():
                                 ed_result_in,
                                 ed_proc,
                                 int(edit_id),
+                                league_id,
                             )
                         )
                         conn.commit()
@@ -214,7 +266,7 @@ def render_matches_page():
                 if delete_it:
                     conn = get_conn()
                     cur = conn.cursor()
-                    cur.execute("DELETE FROM matches WHERE id=%s", (int(edit_id),))
+                    cur.execute("DELETE FROM matches WHERE id=%s AND league_id=%s", (int(edit_id), league_id))
                     conn.commit()
                     conn.close()
 
@@ -254,7 +306,8 @@ def render_matches_page():
                 try:
                     load_matches_df.clear()
                 except Exception:
-                    invalidate_app_caches()
+                    pass
+                invalidate_app_caches()
 
                 if cnt > 0:
                     st.success(f"Processed {cnt} match(es).")
@@ -274,13 +327,11 @@ def render_matches_page():
                 try:
                     load_matches_df.clear()
                 except Exception:
-                    invalidate_app_caches()
+                    pass
+                invalidate_app_caches()
 
                 st.success(f"Full rebuild complete. Processed {cnt} match(es) from 1000.")
                 st.rerun()
 
             except Exception as e:
                 st.error(f"Error while rebuilding season: {e}")
-
-
-

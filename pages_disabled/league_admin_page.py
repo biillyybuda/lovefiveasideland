@@ -2,6 +2,11 @@ import streamlit as st
 
 # If you already have a DB function for this, import that instead.
 from utils.league_utils import update_league_name
+from utils.subscription_utils import (
+    get_plan,
+    load_league_subscription_cached,
+    plan_rows,
+)
 
 
 def render_league_admin_page():
@@ -41,6 +46,27 @@ def render_league_admin_page():
         st.session_state["league_name"] = clean  # update UI immediately
         st.success("League name updated.")
         st.rerun()
+
+    # -----------------------------
+    # Subscription plan
+    # -----------------------------
+    st.markdown("<hr style='opacity:0.18;'>", unsafe_allow_html=True)
+    st.subheader("Subscription")
+
+    if league_id:
+        subscription = load_league_subscription_cached(int(league_id))
+        plan = get_plan(subscription.get("plan_key"))
+        status = str(subscription.get("subscription_status") or "active").title()
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Current Plan", plan.name)
+        c2.metric("Status", status)
+        c3.metric("Yearly", plan.yearly_price_gbp)
+
+        st.caption("Payments are not connected yet. This is the plan model we will wire into Stripe later.")
+        st.dataframe(plan_rows(), use_container_width=True, hide_index=True)
+    else:
+        st.info("Select a league to see its subscription plan.")
 
     # -----------------------------
     # Admin shortcuts (moved from Home)

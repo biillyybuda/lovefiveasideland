@@ -53,7 +53,7 @@ def _cookie_set(controller: CookieController, key: str, value: str) -> None:
     Prefer max_age; if unsupported, fall back to plain set (session cookie).
     """
     try:
-        controller.set(key, value, max_age=COOKIE_MAX_AGE)
+        controller.set(key, value, max_age=COOKIE_MAX_AGE, path="/", same_site="lax")
     except TypeError:
         controller.set(key, value)
     except Exception:
@@ -134,6 +134,7 @@ def _restore_session_from_cookie(force: bool = False) -> bool:
 
     # Cookie component sync can be slow; do the minimum possible.
     try:
+        controller.refresh()
         token = controller.get(COOKIE_KEY)
     except Exception:
         token = None
@@ -146,6 +147,16 @@ def _restore_session_from_cookie(force: bool = False) -> bool:
             token = None
 
     if not token:
+        # On a hard browser refresh the cookie iframe can need one short rerun
+        # before its client-side cookie cache is available. Without this grace
+        # pass the app may show the login form even though the refresh cookie is
+        # still valid in the browser.
+        first_probe = float(st.session_state.get("_lf_cookie_probe_started", 0) or 0)
+        if not force and not first_probe:
+            st.session_state["_lf_cookie_probe_started"] = now
+            st.info("Checking your saved login...")
+            st.stop()
+        st.session_state.pop("_lf_cookie_probe_started", None)
         st.session_state["_lf_auth_checked"] = True
         return False
 
@@ -177,6 +188,7 @@ def _restore_session_from_cookie(force: bool = False) -> bool:
         st.session_state["sb_session"] = sess
         st.session_state["_lf_auth_checked"] = True
         st.session_state["_lf_auth_last_refresh"] = now
+        st.session_state.pop("_lf_cookie_probe_started", None)
 
         # Persist rotated refresh token, but do not force extra cookie reads.
         _cookie_set(
@@ -192,6 +204,7 @@ def _restore_session_from_cookie(force: bool = False) -> bool:
         except Exception:
             pass
         st.session_state.pop("sb_session", None)
+        st.session_state.pop("_lf_cookie_probe_started", None)
         st.session_state["_lf_auth_checked"] = True
         return False
 
@@ -218,7 +231,7 @@ def sb_client_authed():
     return sb
 
 
-def login_ui():
+def _legacy_login_ui():
     sb = get_supabase()
     controller = _get_cookie_controller()
 
@@ -243,7 +256,7 @@ def login_ui():
     submitted = st.button(submit_label, use_container_width=True, key="auth_submit")
 
     if mode == "login":
-        st.caption("Don’t have an account?")
+        st.caption("Don't have an account?")
         if st.button("Create one", key="switch_to_signup"):
             st.session_state["auth_mode"] = "signup"
             st.rerun()
@@ -306,6 +319,142 @@ def login_ui():
         st.success("Logged in.")
         st.rerun()
 
+    except Exception as e:
+        st.error(f"Login failed: {e}")
+
+
+def login_ui():
+    """Render a compact auth card and persist a refresh-token cookie on login."""
+    sb = get_supabase()
+    controller = _get_cookie_controller()
+
+    if "auth_mode" not in st.session_state:
+        st.session_state["auth_mode"] = "login"
+
+    mode = st.session_state["auth_mode"]
+    st.markdown(
+        """
+        <style>
+        .lf-auth-wrap {
+            max-width: 460px;
+            margin: 18px auto 0 auto;
+            padding: 22px 22px 18px 22px;
+            border: 1px solid rgba(255,255,255,0.10);
+            border-radius: 14px;
+            background: rgba(255,255,255,0.035);
+            box-shadow: 0 18px 55px rgba(0,0,0,0.22);
+        }
+        .lf-auth-title {
+            font-size: 1.35rem;
+            font-weight: 900;
+            margin-bottom: 4px;
+            text-align: center;
+        }
+        .lf-auth-sub {
+            color: #aab3bd;
+            text-align: center;
+            margin-bottom: 18px;
+            font-size: 0.95rem;
+        }
+        .lf-auth-note {
+            color: #9aa2aa;
+            text-align: center;
+            font-size: 0.85rem;
+            margin-top: 10px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    title = "Sign in to Love Five" if mode == "login" else "Create your Love Five account"
+    subtitle = "Your login is kept for 30 days on this device." if mode == "login" else "Use the same email you want linked to your league."
+
+    _left, mid, _right = st.columns([1, 1.15, 1])
+    with mid:
+        st.markdown(
+            f"""
+            <div class="lf-auth-wrap">
+                <div class="lf-auth-title">{title}</div>
+                <div class="lf-auth-sub">{subtitle}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        with st.form("auth_form", clear_on_submit=False):
+            email = st.text_input("Email", key="login_email", placeholder="you@example.com")
+            password = st.text_input("Password", type="password", key="login_pw", placeholder="Your password")
+            confirm = None
+            if mode == "signup":
+                confirm = st.text_input("Confirm password", type="password", key="signup_confirm", placeholder="Repeat password")
+
+            submit_label = "Sign in" if mode == "login" else "Create account"
+            submitted = st.form_submit_button(submit_label, use_container_width=True)
+
+        if mode == "login":
+            st.markdown("<div class='lf-auth-note'>No account yet?</div>", unsafe_allow_html=True)
+            if st.button("Create account", key="switch_to_signup", use_container_width=True):
+                st.session_state["auth_mode"] = "signup"
+                st.rerun()
+        else:
+            st.markdown("<div class='lf-auth-note'>Already have an account?</div>", unsafe_allow_html=True)
+            if st.button("Sign in instead", key="switch_to_login", use_container_width=True):
+                st.session_state["auth_mode"] = "login"
+                st.rerun()
+
+    if not submitted:
+        return
+
+    email_clean = (email or "").strip()
+    if not email_clean:
+        st.error("Please enter your email.")
+        return
+    if not password:
+        st.error("Please enter your password.")
+        return
+
+    if mode == "signup":
+        if not confirm:
+            st.error("Please confirm your password.")
+            return
+        if password != confirm:
+            st.error("Passwords do not match.")
+            return
+        if len(password) < 6:
+            st.error("Password must be at least 6 characters.")
+            return
+
+        try:
+            sb.auth.sign_up({"email": email_clean, "password": password})
+            st.success("Account created. You can sign in now.")
+            st.session_state["auth_mode"] = "login"
+            st.rerun()
+        except Exception as e:
+            st.error(f"Sign-up failed: {e}")
+        return
+
+    try:
+        res = sb.auth.sign_in_with_password({"email": email_clean, "password": password})
+        sess = {
+            "access_token": res.session.access_token,  # type: ignore
+            "refresh_token": res.session.refresh_token,  # type: ignore
+            "user_id": res.user.id,  # type: ignore
+            "email": res.user.email,  # type: ignore
+        }
+        st.session_state["sb_session"] = sess
+        st.session_state["_lf_auth_checked"] = True
+        st.session_state["_lf_auth_last_refresh"] = time.time()
+        st.session_state.pop("_lf_cookie_probe_started", None)
+
+        _cookie_set(
+            controller,
+            COOKIE_KEY,
+            _pack({"refresh_token": sess["refresh_token"], "email": sess.get("email")}),
+        )
+
+        st.success("Signed in.")
+        st.rerun()
     except Exception as e:
         st.error(f"Login failed: {e}")
 

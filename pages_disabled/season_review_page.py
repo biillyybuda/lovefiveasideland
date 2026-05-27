@@ -4,7 +4,7 @@ import datetime
 from pathlib import Path
 from utils.ui_components import page_header
 
-from utils.db_utils import get_conn, backup_db_manual, STARTING_MMR
+from utils.db_utils import get_conn, get_current_league_id, backup_db_manual, STARTING_MMR
 from utils.relationships_utils import calculate_chemistry_for_all_duos, calculate_rivalry_intensity
 
 
@@ -121,39 +121,33 @@ def render_season_review_page():
     else:
         start_date, end_date = quarter_date_range(int(year), quarter)
 
+    league_id = get_current_league_id()
     conn = get_conn()
 
     players = pd.read_sql(
-        "SELECT * FROM public.players WHERE league_id = %s",
+        "SELECT id, name, display_name, mmr FROM public.players WHERE league_id = %s",
         conn,
-        params=(1,),
+        params=(league_id,),
     )
 
     matches = pd.read_sql(
-        "SELECT * FROM public.matches WHERE league_id = %s ORDER BY date ASC",
-        conn,
-        params=(1,),
-    )
-
-    mh = pd.read_sql(
         """
-        SELECT mh.*, p.name, m.date AS match_date
-        FROM public.mmr_history mh
-        JOIN public.players p ON mh.player_id = p.id
-        LEFT JOIN public.matches m ON mh.match_id = m.id
-        WHERE mh.league_id = %s
-        ORDER BY mh.id
+        SELECT id, date, team_a, team_b, score, result
+        FROM public.matches
+        WHERE league_id = %s
+          AND processed = 1
+          AND date >= %s
+          AND date <= %s
+        ORDER BY date ASC, id ASC
         """,
         conn,
-        params=(1,),
+        params=(league_id, start_date, end_date),
     )
 
     conn.close()
 
     disp_map = _build_display_name_map(players)
-    mh_date_col = "match_date" if (not mh.empty and "match_date" in mh.columns) else "date"
 
-    matches = matches[matches.get("processed", 0) == 1].copy()
     matches["date"] = pd.to_datetime(matches["date"], errors="coerce")
 
     def filter_by_period(df, start, end, date_col):
@@ -195,6 +189,48 @@ def render_season_review_page():
 
     st.subheader("Season Summary")
     st.table(summary_df.set_index("Metric"))
+
+    st.subheader("Current Top 5 MMR")
+    top_current_df = (
+        players[["name", "mmr"]]
+        .rename(columns={"name": "Player", "mmr": "MMR"})
+        .sort_values("MMR", ascending=False)
+        .head(5)
+        .reset_index(drop=True)
+    )
+    top_current_df["Player"] = top_current_df["Player"].astype(str).apply(lambda x: disp_map.get(x.upper(), x))
+    top_current_df.index = top_current_df.index + 1
+    st.dataframe(top_current_df)
+
+    # MMR history and relationship awards are the expensive part of this page
+    # online, so the page now renders its useful summary before pulling them.
+    if not st.toggle(
+        "Load full awards and detail",
+        value=False,
+        key="season_review_load_full_detail",
+        help="Loads MMR movement, rivalries, duos and the full awards tables.",
+    ):
+        st.info("Open the full detail when you want the heavier season awards and relationship tables.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    conn = get_conn()
+    mh = pd.read_sql(
+        """
+        SELECT mh.match_id, mh.date, mh.mmr_before, mh.mmr_after, p.name, m.date AS match_date
+        FROM public.mmr_history mh
+        JOIN public.players p ON mh.player_id = p.id
+        LEFT JOIN public.matches m ON mh.match_id = m.id
+        WHERE mh.league_id = %s
+          AND COALESCE(m.date, mh.date) >= %s
+          AND COALESCE(m.date, mh.date) <= %s
+        ORDER BY mh.id
+        """,
+        conn,
+        params=(league_id, start_date, end_date),
+    )
+    conn.close()
+    mh_date_col = "match_date" if (not mh.empty and "match_date" in mh.columns) else "date"
 
     # --- Top 5 Players by MMR
     st.subheader("Top 5 Players by MMR (All Time)")

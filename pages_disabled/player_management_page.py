@@ -4,6 +4,7 @@ from datetime import datetime
 from utils.db_utils import (
     load_players_df,
     get_conn,
+    get_current_league_id,
     backup_db_manual,
     STARTING_MMR,
 )
@@ -14,7 +15,7 @@ from utils.export_utils import df_to_png, fig_to_png_bytes
 from utils.names import canonical_name, display_name
 
 
-
+@st.cache_resource
 def ensure_player_schema():
     """Ensure required columns exist in DB (SQLite + Postgres safe)."""
     conn = get_conn()
@@ -26,7 +27,8 @@ def ensure_player_schema():
         cur.execute("""
             SELECT column_name
             FROM information_schema.columns
-            WHERE table_name = 'players'
+            WHERE table_schema = 'public'
+              AND table_name = 'players'
         """)
         cols = [r[0] for r in cur.fetchall()]
     except Exception:
@@ -57,8 +59,17 @@ def ensure_player_schema():
 
 def render_player_management_page():
     page_header("Player Management", "Add, edit and archive players", center=True, divider=True)
+    role = (st.session_state.get("league_role") or "").lower()
+    if role not in ("admin", "owner"):
+        st.warning("Only league admins can add, edit, archive, or manage players.")
+        if st.button("Back to Home", use_container_width=True):
+            st.session_state["_nav_target"] = "Home"
+            st.rerun()
+        st.stop()
+
     st.markdown("<div class='stCard'>", unsafe_allow_html=True)
 
+    league_id = get_current_league_id()
     ensure_player_schema()
     df = load_players_df()
 
@@ -156,10 +167,19 @@ def render_player_management_page():
                     ui_name = display_name(name_key)
 
                 cur.execute(
-                    'INSERT INTO players (name, display_name, mmr, strengths, fitness, is_active, archived_at) VALUES (?, ?, ?, ?, ?, 1, NULL)',
-                    (name_key, ui_name, float(new_mmr), strengths_str, new_fitness)
+                    """
+                    INSERT INTO players
+                        (league_id, name, display_name, mmr, strengths, fitness, is_active, archived_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, 1, NULL)
+                    ON CONFLICT (league_id, name) DO NOTHING
+                    """,
+                    (league_id, name_key, ui_name, float(new_mmr), strengths_str, new_fitness)
                 )
                 conn.commit()
+                try:
+                    load_players_df.clear()
+                except Exception:
+                    pass
             except Exception as e:
                 st.error(f"Error adding player: {e}")
             finally:
@@ -213,16 +233,20 @@ def render_player_management_page():
             cur = conn.cursor()
             if action == "Archive":
                 cur.execute(
-                    "UPDATE players SET is_active=0, archived_at=? WHERE id=?",
-                    (now, pid),
+                    "UPDATE players SET is_active=0, archived_at=%s WHERE id=%s AND league_id=%s",
+                    (now, pid, league_id),
                 )
             else:
                 cur.execute(
-                    "UPDATE players SET is_active=1, archived_at=NULL WHERE id=?",
-                    (pid,),
+                    "UPDATE players SET is_active=1, archived_at=NULL WHERE id=%s AND league_id=%s",
+                    (pid, league_id),
                 )
             conn.commit()
             conn.close()
+            try:
+                load_players_df.clear()
+            except Exception:
+                pass
 
             st.success(f"✅ {action}d: {chosen_label}")
             st.rerun()
@@ -246,16 +270,25 @@ def render_player_management_page():
 
                     if rid and not pd.isna(rid):
                         cur.execute(
-                            'UPDATE players SET display_name=?, mmr=?, fitness=? WHERE id=?',
-                            (ui_name, mmr, fitness, int(rid))
+                            'UPDATE players SET display_name=%s, mmr=%s, fitness=%s WHERE id=%s AND league_id=%s',
+                            (ui_name, mmr, fitness, int(rid), league_id)
                         )
                     else:
                         cur.execute(
-                            'INSERT OR IGNORE INTO players (name, display_name, mmr, strengths, fitness) VALUES (?, ?, ?, ?, ?)',
-                            (name_key, ui_name, mmr, strengths_str, fitness)
+                            """
+                            INSERT INTO players
+                                (league_id, name, display_name, mmr, strengths, fitness)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (league_id, name) DO NOTHING
+                            """,
+                            (league_id, name_key, ui_name, mmr, strengths_str, fitness)
                         )
                 conn.commit()
                 conn.close()
+                try:
+                    load_players_df.clear()
+                except Exception:
+                    pass
                 st.success('✅ Player edits saved successfully.')
                 st.rerun()
             else:

@@ -30,6 +30,7 @@ import numpy as np
 import itertools
 import hashlib
 import json
+import html as html_lib
 from fractions import Fraction
 import math
 import textwrap
@@ -37,17 +38,30 @@ from utils.betting_markets import build_markets, blended_expected_goals
 
 
 
-from utils.db_utils import load_players_df, get_conn as open_db
-from utils.team_ai_engine import evaluate_teams, get_engine_state, clean_name
+from utils.db_utils import load_players_df, get_conn as open_db, get_current_league_id
+from utils.team_ai_engine import (
+    evaluate_teams,
+    get_engine_state,
+    clean_name,
+    rank_generated_matchups,
+    explain_matchup_plain_english,
+    find_best_tweaks,
+    closest_historical_matchups,
+    blend_market_probabilities,
+)
 from utils.calc_utils import calibrate_winprob_scale, expected_score_calibrated
 from utils.preview_insights import generate_preview_insights
 from utils.ui_components import page_header
 
 @st.cache_data(ttl=300)
-def _players_table_cached():
+def _players_table_cached(league_id: int):
     conn = open_db()
     try:
-        return pd.read_sql("SELECT * FROM players", conn)
+        return pd.read_sql(
+            "SELECT * FROM players WHERE league_id = %s",
+            conn,
+            params=(int(league_id),),
+        )
     finally:
         conn.close()
 
@@ -89,10 +103,8 @@ def _format_1dp(styler, df: pd.DataFrame):
 # Win-prob calibration (cached)
 # ----------------------------
 @st.cache_data(ttl=3600)
-def _prob_scale():
-    return calibrate_winprob_scale(default_scale=200.0)
-
-_SCALE = _prob_scale()
+def _prob_scale(league_id: int):
+    return calibrate_winprob_scale(default_scale=200.0, league_id=int(league_id))
 
 def _display_name(nm: str) -> str:
     """Pretty display version of a stored player name (keeps short tokens uppercased)."""
@@ -292,9 +304,71 @@ def _best_similar_meetings(
     return out.head(top_n).to_dict(orient="records")
 
 def _render_previous_meetings_block(team_a: list[str], team_b: list[str], matches_eng: pd.DataFrame, players_df: pd.DataFrame):
-    meetings = _best_similar_meetings(team_a, team_b, matches_eng, top_n=1, min_side_overlap=3)
+    meetings = closest_historical_matchups(team_a, team_b, top_n=3, min_side_overlap=2)
     if not meetings:
-        return  # silent if requirements not met
+        st.caption("No close historical matchups found for this exact shape yet.")
+        return
+
+    def dn_compact(x):
+        return html_lib.escape(_name_ui(str(x or ""), players_df))
+
+    def pills_compact(players: list[str], today: list[str]) -> str:
+        today_set = {clean_name(p) for p in today}
+        bits = []
+        for p in players:
+            cls = "active" if clean_name(p) in today_set else "out"
+            bits.append(f"<span class='pm-pill {cls}'>{dn_compact(p)}</span>")
+        return "".join(bits)
+
+    def changes_compact(rows: list[dict]) -> str:
+        if not rows:
+            return "<div class='pm-meta'>Same core as today</div>"
+        bits = []
+        for r in rows:
+            old = dn_compact(r.get("out") or "-")
+            new = dn_compact(r.get("in") or "-")
+            bits.append(
+                "<div class='pm-subrow'>"
+                f"<span class='pm-pill out'>{old}</span>"
+                "<span class='pm-arrow'>to</span>"
+                f"<span class='pm-pill in'>{new}</span>"
+                "</div>"
+            )
+        return "<div class='pm-subs'>" + "".join(bits) + "</div>"
+
+    cards = []
+    for idx, meeting in enumerate(meetings, 1):
+        date_txt = html_lib.escape(str(meeting.get("date") or "Unknown date"))
+        score_txt = html_lib.escape(str(meeting.get("scoreline") or "-"))
+        sim_txt = f"{float(meeting.get('similarity', 0.0) or 0.0) * 100:.0f}% similar"
+        cards.append(f"""
+<div class="pm-card">
+  <div class="pm-top pm-scorebar">
+    <div class="pm-meta" style="text-align:center;width:100%;">#{idx} closest previous game - {date_txt} - {sim_txt}</div>
+    <div class="pm-scoreline">
+      <span class="pm-scoreteam pm-a">Team A</span>
+      <span class="pm-score">{score_txt}</span>
+      <span class="pm-scoreteam pm-b">Team B</span>
+    </div>
+  </div>
+  <div class="pm-grid">
+    <div class="pm-team a">
+      <div class="pm-team-h"><span>Closest old Team A</span></div>
+      <div class="pm-line">{pills_compact(list(meeting.get("hist_team_a") or []), team_a)}</div>
+      <div class="pm-subtitle">Missing/replaced</div>
+      {changes_compact(list(meeting.get("team_a_changes") or []))}
+    </div>
+    <div class="pm-team b">
+      <div class="pm-team-h"><span>Closest old Team B</span></div>
+      <div class="pm-line">{pills_compact(list(meeting.get("hist_team_b") or []), team_b)}</div>
+      <div class="pm-subtitle">Missing/replaced</div>
+      {changes_compact(list(meeting.get("team_b_changes") or []))}
+    </div>
+  </div>
+</div>
+""")
+    st.html(textwrap.dedent("".join(cards)))
+    return
 
     m = meetings[0]
     histA = m["hist_team_a"]
@@ -418,6 +492,8 @@ def _ensure_session_defaults():
         st.session_state.tg_has_generated = False
     if "tg_selected_players" not in st.session_state:
         st.session_state.tg_selected_players = []
+    if "tg_player_picker" not in st.session_state:
+        st.session_state.tg_player_picker = list(st.session_state.tg_selected_players)
 
 
 def _ensure_color_settings():
@@ -609,7 +685,7 @@ def _to_fractional_odds(decimal_odds: float, max_den: int = 20) -> str:
 
 
 @st.cache_data(ttl=3600)
-def _league_winprob_params():
+def _league_winprob_params(league_id: int):
     """Calibrate expected-score mapping using your league's historical match data.
 
     We try to build training examples from:
@@ -620,12 +696,21 @@ def _league_winprob_params():
     where diff = avg_mmr_A - avg_mmr_B and pE ≈ P(A win) + 0.5*P(draw).
     """
     # Sensible defaults (keeps behaviour close to current)
-    best_bias, best_scale = 0.0, float(_SCALE if _SCALE else 200.0)
+    scale = _prob_scale(int(league_id))
+    best_bias, best_scale = 0.0, float(scale if scale else 200.0)
 
     try:
         conn = open_db()
         try:
-            matches = pd.read_sql("SELECT id, team_a, team_b, result FROM matches", conn)
+            matches = pd.read_sql(
+                """
+                SELECT id, team_a, team_b, result
+                FROM matches
+                WHERE league_id = %s
+                """,
+                conn,
+                params=(int(league_id),),
+            )
         except Exception:
             conn.close()
             return best_bias, best_scale
@@ -641,8 +726,10 @@ def _league_winprob_params():
                 SELECT mh.match_id, p.name AS name, mh.mmr_before
                 FROM mmr_history mh
                 JOIN players p ON p.id = mh.player_id
+                WHERE mh.league_id = %s
                 """,
                 conn,
+                params=(int(league_id),),
             )
         except Exception:
             conn.close()
@@ -712,18 +799,18 @@ def _league_winprob_params():
         return best_bias, best_scale
 
 
-_BIAS, _LEAGUE_SCALE = _league_winprob_params()
-
-
 def _expected_score_league_calibrated(a_mmr: float, b_mmr: float) -> float:
     """League-calibrated expected score (win + 0.5 draw)."""
     try:
+        league_id = get_current_league_id()
+        bias, league_scale = _league_winprob_params(league_id)
         diff = float(a_mmr) - float(b_mmr)
-        z = _BIAS + (diff / float(_LEAGUE_SCALE if _LEAGUE_SCALE else 200.0))
+        z = bias + (diff / float(league_scale if league_scale else 200.0))
         p = 1.0 / (1.0 + math.exp(-z))
         return _clamp(p, 0.01, 0.99)
     except Exception:
-        return _clamp(expected_score_calibrated(a_mmr, b_mmr, scale=_SCALE), 0.01, 0.99)
+        scale = _prob_scale(get_current_league_id())
+        return _clamp(expected_score_calibrated(a_mmr, b_mmr, scale=scale), 0.01, 0.99)
 
 
 def _style_team_columns(df: pd.DataFrame, team_a: list[str], team_b: list[str], teamA_fg: str, teamB_fg: str):
@@ -1115,12 +1202,29 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
         font-size:1.1rem;
         }
 
+        @media (max-width: 760px){
+        .mdk-section{padding:12px 10px;border-radius:12px;}
+        .mdk-teambox{padding:10px 11px;border-radius:12px;}
+        .oddsbox{display:grid;grid-template-columns:1fr;gap:8px;}
+        .odd{padding:9px 10px;border-radius:10px;}
+        .odd .val{font-size:1.08rem;}
+        .pm-card{padding:12px 10px;border-radius:12px;}
+        .pm-grid{grid-template-columns:1fr;gap:10px;}
+        .pm-team{padding:10px 11px;border-radius:12px;}
+        .pm-scoreline{gap:8px;flex-wrap:wrap;}
+        .pm-scoreteam{font-size:1.30rem;white-space:normal;}
+        .pm-score{font-size:1.85rem;}
+        .pm-pill{font-size:0.88rem;padding:5px 8px;}
+        .pm-subrow{font-size:0.92rem;gap:6px;flex-wrap:wrap;}
+        .pm-meta{font-size:0.82rem;}
+        }
+
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-    players_df = _players_table_cached()
+    players_df = _players_table_cached(get_current_league_id())
 
     # Engine state (results-only friendly)
     eng = get_engine_state()
@@ -1203,6 +1307,18 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
         pA_disp = float(mx["1"]["p"])
         pX_disp = float(mx["X"]["p"])
         pB_disp = float(mx["2"]["p"])
+
+    try:
+        blended_1x2 = blend_market_probabilities(team_a, team_b, (pA_disp, pX_disp, pB_disp))
+        pA_disp = float(blended_1x2.get("pA", pA_disp))
+        pX_disp = float(blended_1x2.get("pDraw", pX_disp))
+        pB_disp = float(blended_1x2.get("pB", pB_disp))
+        oddA, oddX, oddB = _book_odds(pA_disp, pX_disp, pB_disp, overround=1.06)
+        labA, _ = _snap_decimal_to_bookie_ladder(oddA)
+        labX, _ = _snap_decimal_to_bookie_ladder(oddX)
+        labB, _ = _snap_decimal_to_bookie_ladder(oddB)
+    except Exception:
+        blended_1x2 = {}
 
     header_html = f"""
     <div style="border-radius:16px;padding:14px 16px;margin-top:8px;
@@ -1288,6 +1404,8 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
     # 📊 Betting Markets (fun only)
     # -----------------------------
     with st.expander("📊 Betting Markets", expanded=False):
+        if blended_1x2:
+            st.caption("Prices blend expected goals with MMR/form, chemistry, trio links, awkward pairings and closest past scorelines.")
 
         # Helper to render odds tiles in the same style as your 1X2 row
         def _render_tiles(items):
@@ -1762,6 +1880,10 @@ def render_team_generator_page(show_header: bool = True):
         c_back, _ = st.columns([1,1])
         with c_back:
             if st.button("⬅️ Change matchup"):
+                restore_players = sel_payload.get("selected_players") or list(team_a) + list(team_b)
+                if restore_players:
+                    st.session_state.tg_selected_players = list(restore_players)
+                    st.session_state.tg_player_picker = list(restore_players)
                 st.session_state.selected_matchup = None
                 st.session_state.mdk_expanded = False
                 st.rerun()
@@ -1810,6 +1932,13 @@ def render_team_generator_page(show_header: bool = True):
         st.warning("Need at least 10 players.")
         return
 
+    saved_picker = [
+        p for p in list(st.session_state.get("tg_player_picker") or st.session_state.get("tg_selected_players") or [])
+        if p in names
+    ]
+    st.session_state.tg_player_picker = saved_picker
+    st.session_state.tg_selected_players = saved_picker
+
     # Captain Mode
     captain_mode = st.toggle("Enable Captain Mode (exclude captains from balance)")
 
@@ -1826,9 +1955,10 @@ def render_team_generator_page(show_header: bool = True):
     sel = st.multiselect(
         "Select players for balance",
         names,
-        default=st.session_state.tg_selected_players,
+        key="tg_player_picker",
         format_func=_display_name,
     )
+    st.session_state.tg_selected_players = list(sel)
 
     if captain_mode and captainA and captainB:
         sel = [p for p in sel if p not in [captainA, captainB]]
@@ -1904,56 +2034,42 @@ def render_team_generator_page(show_header: bool = True):
         except Exception:
             calib_df_for_rank = pd.DataFrame()
 
-        all_ranked = []
+        rank_candidates = []
         for idx, (score_val, A, B, breakdown) in enumerate(list(unique.values()), 1):
             try:
                 interp = calibration_lookup(float(score_val), calib_df_for_rank, bucket_size=5.0, close_goal_diff=2)
             except Exception:
                 interp = {"quality": None, "close_pct": None, "typical_margin": None, "n": 0, "bucket": None}
 
-            # Prefer V2 fields if the engine provides them. Otherwise use historical calibration.
-            q = breakdown.get("v2_quality", interp.get("quality", None))
-            close = breakdown.get("v2_close_pct", interp.get("close_pct", None))
-            margin = breakdown.get("v2_predicted_margin", interp.get("typical_margin", None))
+            rank_candidates.append((score_val, A, B, breakdown, interp))
 
-            q_raw = float(q) if q is not None else 0.0
-            q_scaled = _scale_game_quality(q_raw)
-            close = float(close) if close is not None else 0.0
-            margin = float(margin) if margin is not None else 99.0
-
-            mmr_diff = float(breakdown.get("mmr_diff", 0.0) or 0.0)
-            spread_diff = float(breakdown.get("spread_diff", 0.0) or 0.0)
-            chem_diff = float(breakdown.get("chem_diff", 0.0) or 0.0)
-            bad_total = float(breakdown.get("badpair_total", 0.0) or 0.0)
-            sim_pen = float(breakdown.get("similarity_penalty", 0.0) or 0.0)
-
-            paper_score = 100.0
-            paper_score -= min(55.0, mmr_diff * 1.25)
-            paper_score -= min(20.0, spread_diff * 0.35)
-            paper_score -= min(10.0, chem_diff * 0.25)
-            paper_score -= min(8.0, bad_total * 1.2)
-            paper_score -= min(7.0, sim_pen * 0.7)
-            paper_score = _clamp(paper_score, 0.0, 100.0)
-
-            margin_score = _clamp(100.0 - max(0.0, margin - 1.5) * 22.0, 0.0, 100.0)
-            recommendation_score = _clamp((paper_score * 0.35) + (margin_score * 0.30) + (close * 0.20) + (q_scaled * 0.15), 0.0, 100.0)
-
-            interp["recommendation_score"] = recommendation_score
-            interp["paper_score"] = paper_score
-            interp["margin_score"] = margin_score
-            interp["quality_raw"] = q_raw
-            interp["quality_scaled"] = q_scaled
-
-            rank_key = (-recommendation_score, margin, -paper_score, -close, float(score_val))
+        ranked_rows = rank_generated_matchups(rank_candidates)
+        all_ranked = []
+        for row in ranked_rows:
+            score_val = float(row["score"])
+            A = list(row["A"])
+            B = list(row["B"])
+            breakdown = dict(row["breakdown"])
+            interp = dict(row["quality_interp"])
+            q_raw = breakdown.get("v2_quality", interp.get("quality_component", interp.get("quality", 0.0)))
+            interp["quality_raw"] = float(q_raw or 0.0)
+            interp["quality_scaled"] = _scale_game_quality(q_raw)
+            interp["paper_score"] = float(interp.get("mmr_component", 0.0) or 0.0)
+            interp["margin_score"] = float(interp.get("margin_component", 0.0) or 0.0)
+            rank_key = (
+                -float(interp.get("recommendation_score", 0.0) or 0.0),
+                float(interp.get("predicted_margin", 99.0) or 99.0),
+                -float(interp.get("close_pct", 0.0) or 0.0),
+                score_val,
+            )
             all_ranked.append((rank_key, score_val, A, B, breakdown, interp))
-
-        all_ranked.sort(key=lambda x: x[0])
 
         # Pick a deliberately diverse shortlist. Each option has a different
         # footballing philosophy instead of showing five tiny variations of the
         # same safe chemistry split. Core-reuse penalties are only used for this
         # shortlist, not for the actual fairness model.
         top = _build_diverse_smart_options(all_ranked)
+        top = sorted(top, key=lambda pair: pair[0][0])
 
         st.session_state.tg_all_matchups = {
             "captain_mode": bool(captain_mode),
@@ -1965,14 +2081,30 @@ def render_team_generator_page(show_header: bool = True):
             ],
         }
 
+        top_items = []
+        for rank_i, ((_rank_key, score, A, B, breakdown, interp), label) in enumerate(top, 1):
+            disp_A_for_tweaks = ([captainA] + A) if (captain_mode and captainA) else A[:]
+            disp_B_for_tweaks = ([captainB] + B) if (captain_mode and captainB) else B[:]
+            try:
+                tweaks = find_best_tweaks(disp_A_for_tweaks, disp_B_for_tweaks, max_suggestions=2)
+            except Exception:
+                tweaks = {"suggestions": [], "message": "No obvious improvement found."}
+            top_items.append({
+                "rank": rank_i,
+                "smart_label": label,
+                "score": score,
+                "A": A,
+                "B": B,
+                "breakdown": breakdown,
+                "quality_interp": interp,
+                "tweaks": tweaks,
+            })
+
         st.session_state.tg_top_matchups = {
             "captain_mode": bool(captain_mode),
             "captainA": captainA,
             "captainB": captainB,
-            "items": [
-                {"rank": rank_i, "smart_label": label, "score": score, "A": A, "B": B, "breakdown": breakdown, "quality_interp": interp}
-                for rank_i, ((_rank_key, score, A, B, breakdown, interp), label) in enumerate(top, 1)
-            ],
+            "items": top_items,
         }
 
     # ----- Render persisted results (if any) -----
@@ -2064,7 +2196,13 @@ def render_team_generator_page(show_header: bool = True):
                             disp_B_ch = ([all_payload.get("captainB")] + B_ch) if (all_payload.get("captain_mode") and all_payload.get("captainB")) else B_ch[:]
                             st.session_state.team_a = disp_A_ch
                             st.session_state.team_b = disp_B_ch
-                            st.session_state.selected_matchup = {"team_a": disp_A_ch, "team_b": disp_B_ch, "picked_index": int(pick_id)}
+                            st.session_state.tg_selected_players = list(sel)
+                            st.session_state.selected_matchup = {
+                                "team_a": disp_A_ch,
+                                "team_b": disp_B_ch,
+                                "picked_index": int(pick_id),
+                                "selected_players": list(sel),
+                            }
                             st.session_state.mdk_expanded = True
                             st.rerun()
 
@@ -2093,21 +2231,26 @@ def render_team_generator_page(show_header: bool = True):
                 border-radius: 12px;
                 padding: 10px;
                 margin: 10px 0 20px 0;
-                font-size: 1.3em;
                 font-weight: 700;
                 background: linear-gradient(90deg, {palA['bg']} 0%, {palB['bg']} 100%);
-            ">
-                {teamA_icon} <span style="color:{palA['fg']};">Team A: {teamA_color}</span>
-                &nbsp;&nbsp;vs&nbsp;&nbsp;
-                {teamB_icon} <span style="color:{palB['fg']};">Team B: {teamB_color}</span>
+            " class="tg-option-head">
+                <span>{teamA_icon} <span style="color:{palA['fg']};">Team A: {teamA_color}</span></span>
+                <span>vs</span>
+                <span>{teamB_icon} <span style="color:{palB['fg']};">Team B: {teamB_color}</span></span>
             </div>
+            <style>
+            .tg-option-head{{font-size:1.25rem;display:flex;justify-content:center;align-items:center;gap:16px;flex-wrap:wrap;}}
+            @media (max-width:760px){{
+              .tg-option-head{{font-size:0.98rem;gap:6px;line-height:1.25;padding:9px !important;margin-bottom:12px !important;}}
+            }}
+            </style>
             """,
             unsafe_allow_html=True,
         )
 
         interp_saved = dict(item.get("quality_interp") or {})
         smart_label = str(item.get("smart_label") or "Option")
-        st.markdown(f"**Option {i} — {smart_label}**")
+        st.markdown(f"**Rank #{int(item.get('rank', i) or i)} - {smart_label}**")
 
         # Clean matchup card (no repeated sub-headers)
         boxA = f"""
@@ -2155,6 +2298,9 @@ def render_team_generator_page(show_header: bool = True):
             c2.metric("Tight-game chance", f"{close_pct:.0f}%", help="Estimated chance this game finishes within 2 goals, based on similar previous games and the V2 fallback model.")
 
             # --- Human-readable AI explanation layer ---
+            ai_explainer = explain_matchup_plain_english(disp_A, disp_B, breakdown, interp)
+            st.caption(str(ai_explainer.get("headline") or ""))
+
             archetype = _matchup_archetype(breakdown)
             positives, risks = _option_explanation(breakdown, float(close_pct or 0))
             team_a_identity, team_b_identity = _team_identity_summary(breakdown)
@@ -2183,13 +2329,35 @@ def render_team_generator_page(show_header: bool = True):
                     icon = "🟢" if "No major" in r else "🟡"
                     st.markdown(f"- {icon} {r}")
 
+            tweak_payload = dict(item.get("tweaks") or {})
+            suggestions = list(tweak_payload.get("suggestions") or [])
+            st.markdown("**Suggested tweak**")
+            if suggestions:
+                for s in suggestions[:2]:
+                    st.markdown(
+                        f"- Swap **{_name_ui(s.get('swap_a'), players_df)}** with **{_name_ui(s.get('swap_b'), players_df)}**: "
+                        f"{s.get('reason', 'improves the balance')} "
+                        f"(+{float(s.get('recommendation_gain', 0.0) or 0.0):.1f} ranking points)"
+                    )
+            else:
+                st.markdown(f"- {tweak_payload.get('message') or 'No obvious improvement found.'}")
+
+            with st.expander("WhatsApp share text", expanded=False):
+                st.code("\n".join(str(x) for x in ai_explainer.get("whatsapp", []) if x), language="text")
+
 
 
         use_key = f"use_matchup_{i}"
         if st.button("✅ Use this matchup for Matchday Card", key=use_key):
             st.session_state.team_a = disp_A
             st.session_state.team_b = disp_B
-            st.session_state.selected_matchup = {"team_a": disp_A, "team_b": disp_B, "picked_index": i}
+            st.session_state.tg_selected_players = list(sel)
+            st.session_state.selected_matchup = {
+                "team_a": disp_A,
+                "team_b": disp_B,
+                "picked_index": i,
+                "selected_players": list(sel),
+            }
             st.session_state.mdk_expanded = True
             st.rerun()
         with st.expander("🔍 Fairness Breakdown"):

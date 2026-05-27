@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from collections import defaultdict
-from utils.db_utils import load_players_df, load_matches_df, get_conn
+from utils.db_utils import load_players_df, load_matches_df, get_conn, get_current_league_id
 from utils.calc_utils import compute_streaks_from_matches
 from utils.export_utils import df_to_png
 from utils.mmr_utils import get_season_mmr, get_current_season_start
@@ -65,14 +65,15 @@ def render_performance_page():
 
     # --- Last 5 MMR & delta ---
     conn = get_conn()
+    league_id = get_current_league_id()
     rows = []
     for _, r in dfp.iterrows():
         pid = r['id']
         name = r['name']
         ph = pd.read_sql(
-            'SELECT * FROM mmr_history WHERE player_id = %s ORDER BY id DESC LIMIT 5',
+            'SELECT * FROM mmr_history WHERE player_id = %s AND league_id = %s ORDER BY id DESC LIMIT 5',
             conn,
-            params=(pid,)
+            params=(pid, league_id)
         )
 
         season_start = get_current_season_start()

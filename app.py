@@ -104,29 +104,6 @@ except Exception:
     # will show the real error if the DB is unavailable.
     pass
 
-st.sidebar.success(f"League: {st.session_state.get('league_name', st.session_state['league_id'])}")
-st.sidebar.markdown("---")
-
-# Profile Settings (everyone)
-if st.sidebar.button("👤 Profile Settings", use_container_width=True):
-    st.session_state["_nav_target"] = "Profile Settings"
-    st.rerun()
-
-# Join / Invite (everyone)
-if st.sidebar.button("🔗 Join / Invite", use_container_width=True):
-    st.session_state["_nav_target"] = "Join / Invite"
-    st.rerun()
-
-# League Admin (admins only)
-role = (st.session_state.get("league_role") or "").lower()
-if role in ("admin", "owner"):
-    if st.sidebar.button("⚙️ League Admin", use_container_width=True):
-        st.session_state["_nav_target"] = "League Admin"
-        st.rerun()
-
-st.sidebar.markdown("---")
-
-
 # -----------------------------
 # PLAYER LINK GATE (Step B)
 # -----------------------------
@@ -189,7 +166,7 @@ if "_nav_target" in st.session_state:
 if "page" not in st.session_state:
     st.session_state["page"] = "Home"
 
-# Only show page dropdown AFTER auth+league selection
+# Sidebar fallback list. Main navigation is handled by grouped buttons below.
 page_options = list(PAGES.keys())
 
 # ✅ If we are currently on a hidden page, include it so Streamlit doesn't bounce us back
@@ -197,12 +174,46 @@ current_page = st.session_state.get("page")
 if current_page in HIDDEN_PAGES and current_page not in page_options:
     page_options = [current_page] + page_options
 
-st.sidebar.selectbox(
-    "",
-    page_options,
-    key="page",
-    label_visibility="collapsed",
-)
+league_name = st.session_state.get("league_name", st.session_state["league_id"])
+st.sidebar.markdown(f"**League**  \n{league_name}")
+st.sidebar.markdown("---")
+
+def _sidebar_nav_button(label: str, target: str, key: str):
+    active = current_page == target
+    shown = f"> {label}" if active else label
+    if st.sidebar.button(shown, use_container_width=True, key=key, disabled=active):
+        st.session_state["page"] = target
+        st.rerun()
+
+
+st.sidebar.caption("Main")
+_sidebar_nav_button("Home", "Home", "nav_home")
+_sidebar_nav_button("Matchday Hub", "Matchday Hub", "nav_matchday")
+_sidebar_nav_button("Dashboard", "Dashboard", "nav_dashboard")
+_sidebar_nav_button("Charts & Stats", "Charts & Stats", "nav_charts")
+_sidebar_nav_button("Season Review", "Season Review", "nav_season")
+
+st.sidebar.markdown("---")
+st.sidebar.caption("League")
+_sidebar_nav_button("Join / Invite", "Join / Invite", "nav_join")
+_sidebar_nav_button("Profile Settings", "Profile Settings", "nav_profile")
+_sidebar_nav_button("Info", "Info", "nav_info")
+
+role = (st.session_state.get("league_role") or "").lower()
+if role in ("admin", "owner"):
+    st.sidebar.markdown("---")
+    st.sidebar.caption("Admin")
+    _sidebar_nav_button("Add Result", "Matches Management", "nav_add_result")
+    _sidebar_nav_button("League Admin", "League Admin", "nav_league_admin")
+    _sidebar_nav_button("Player Management", "Player Management", "nav_players")
+
+with st.sidebar.expander("All pages", expanded=False):
+    st.selectbox(
+        "",
+        page_options,
+        key="page",
+        label_visibility="collapsed",
+    )
 st.sidebar.markdown("---")
 
 # Manual cache refresh (useful after edits or if Render/Supabase feels stale)

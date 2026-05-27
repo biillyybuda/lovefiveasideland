@@ -4,7 +4,6 @@ from utils.db_utils import load_players_df, load_matches_df, get_conn, STARTING_
 from utils.calc_utils import compute_streaks_from_matches
 from utils.export_utils import df_to_png
 from collections import defaultdict
-from utils.mmr_utils import get_display_mmr, get_season_mmr
 from utils.ui_components import page_header
 
 
@@ -24,15 +23,43 @@ def compute_result_from_score(score: str):
     return "DRAW"
 
 @st.cache_data(ttl=300)
-def _season_mmr_map(player_rows: tuple[tuple[int, float], ...], season_start: str):
+def _season_baseline_map(player_ids: tuple[int, ...], season_start: str):
+    if not player_ids:
+        return {}
+
     conn = get_conn()
     try:
-        out = {}
-        for pid, current_mmr in player_rows:
-            out[int(pid)] = float(get_season_mmr(conn, int(pid), season_start, float(current_mmr)))
-        return out
+        df = pd.read_sql(
+            """
+            SELECT DISTINCT ON (player_id)
+                   player_id, mmr_after
+            FROM public.mmr_history
+            WHERE player_id = ANY(%s)
+              AND date < %s
+            ORDER BY player_id, date DESC, id DESC
+            """,
+            conn,
+            params=(list(player_ids), season_start),
+        )
     finally:
         conn.close()
+
+    return {
+        int(row["player_id"]): float(row["mmr_after"])
+        for _, row in df.iterrows()
+        if pd.notna(row.get("mmr_after"))
+    }
+
+
+@st.cache_data(ttl=300)
+def _season_mmr_map(player_rows: tuple[tuple[int, float], ...], season_start: str):
+    player_ids = tuple(int(pid) for pid, _ in player_rows)
+    baselines = _season_baseline_map(player_ids, season_start)
+    out = {}
+    for pid, current_mmr in player_rows:
+        baseline = baselines.get(int(pid), float(STARTING_MMR))
+        out[int(pid)] = float(STARTING_MMR) + (float(current_mmr) - baseline)
+    return out
 
 
 def render_dashboard_page():
@@ -207,14 +234,15 @@ def render_dashboard_page():
             if not mh.empty:
                 # --- Display MMR: rolling vs season reset
                 if season_mode == "Single Year (season reset)" and season_start:
-                    mh["MMR Before"] = mh.apply(
-                        lambda r2: get_season_mmr(conn, int(r2["player_id"]), season_start, float(r2["mmr_before"])),
-                        axis=1
-                    )
-                    mh["MMR After"] = mh.apply(
-                        lambda r2: get_season_mmr(conn, int(r2["player_id"]), season_start, float(r2["mmr_after"])),
-                        axis=1
-                    )
+                    player_ids = tuple(int(pid) for pid in mh["player_id"].dropna().unique().tolist())
+                    baselines = _season_baseline_map(player_ids, season_start)
+
+                    def season_display_mmr(row, col):
+                        baseline = baselines.get(int(row["player_id"]), float(STARTING_MMR))
+                        return float(STARTING_MMR) + (float(row[col]) - baseline)
+
+                    mh["MMR Before"] = mh.apply(lambda r2: season_display_mmr(r2, "mmr_before"), axis=1)
+                    mh["MMR After"] = mh.apply(lambda r2: season_display_mmr(r2, "mmr_after"), axis=1)
                 else:
                     mh["MMR Before"] = mh["mmr_before"].astype(float)
                     mh["MMR After"] = mh["mmr_after"].astype(float)

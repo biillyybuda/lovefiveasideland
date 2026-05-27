@@ -27,6 +27,16 @@ section[data-testid="stSidebar"]{
   background: var(--bg) !important;
   border-right: 1px solid var(--border) !important;
 }
+section[data-testid="stSidebar"] .stButton > button{
+  justify-content: flex-start !important;
+  min-height: 38px !important;
+}
+section[data-testid="stSidebar"] .stButton > button:disabled{
+  opacity: 1 !important;
+  background: rgba(46,134,171,0.18) !important;
+  border-color: rgba(46,134,171,0.45) !important;
+  color: #e6eef6 !important;
+}
 
 /* Generic “card” helpers */
 .stCard{
@@ -90,6 +100,54 @@ div[data-testid="stTable"]{
 
 /* Markdown links */
 a { color: #6fb3d2 !important; }
+
+/* Mobile polish */
+@media (max-width: 760px){
+  [data-testid="stMainBlockContainer"]{
+    padding-left: 0.8rem !important;
+    padding-right: 0.8rem !important;
+    padding-top: 0.8rem !important;
+  }
+
+  h1{font-size: 1.55rem !important; line-height: 1.18 !important;}
+  h2{font-size: 1.30rem !important; line-height: 1.20 !important;}
+  h3{font-size: 1.08rem !important; line-height: 1.22 !important;}
+
+  .stButton > button,
+  button[kind="primary"],
+  button[kind="secondary"],
+  div[data-testid="stFormSubmitButton"] button{
+    min-height: 46px !important;
+    border-radius: 12px !important;
+    font-size: 0.98rem !important;
+    white-space: normal !important;
+  }
+
+  .stCard{
+    padding: 10px !important;
+    border-radius: 10px !important;
+  }
+
+  div[data-testid="stHorizontalBlock"]{
+    gap: 0.55rem !important;
+  }
+
+  div[data-testid="stHorizontalBlock"] > div{
+    min-width: 0 !important;
+  }
+
+  div[data-baseweb="select"] > div,
+  div[data-baseweb="input"] > div,
+  div[data-baseweb="textarea"] > div{
+    min-height: 44px !important;
+  }
+
+  div[data-testid="stDataFrame"],
+  div[data-testid="stTable"]{
+    overflow-x: auto !important;
+    border-radius: 10px !important;
+  }
+}
 </style>
 """
 
