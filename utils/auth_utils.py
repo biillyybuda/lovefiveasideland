@@ -92,6 +92,7 @@ def _clear_auth_state() -> None:
         "_lf_cookie_probe_started",
         "_lf_league_cookie_checked",
         "_lf_skip_league_restore_once",
+        "_lf_demo_viewer",
         "_lf_pending_logout",
     ):
         st.session_state.pop(key, None)
@@ -204,7 +205,7 @@ def _restore_session_from_cookie(force: bool = False) -> bool:
                 st.session_state["_lf_cookie_probe_started"] = now
             st.info("Checking your saved login...")
             time.sleep(0.2)
-            st.stop()
+            st.rerun()
         st.session_state.pop("_lf_cookie_probe_started", None)
         st.session_state["_lf_auth_checked"] = True
         return False
@@ -361,7 +362,8 @@ def restore_selected_league(leagues: list[dict]) -> bool:
         if not st.session_state.get("_lf_league_cookie_checked"):
             st.session_state["_lf_league_cookie_checked"] = True
             st.info("Restoring your league...")
-            st.stop()
+            time.sleep(0.2)
+            st.rerun()
         return False
 
     payload = _unpack(str(token)) if token else None
@@ -560,6 +562,17 @@ def login_ui():
                 st.session_state["auth_mode"] = "login"
                 st.rerun()
 
+        st.markdown("<div class='lf-auth-note'>Want to look around first?</div>", unsafe_allow_html=True)
+        if st.button("View demo league", key="view_demo_before_login", use_container_width=True):
+            from utils.league_utils import enter_demo_league_viewer
+
+            if not enter_demo_league_viewer():
+                st.error("The demo league is not available right now.")
+                return
+            st.query_params["demo"] = "1"
+            st.session_state["page"] = "Home"
+            st.rerun()
+
     if not submitted:
         return
 
@@ -620,8 +633,10 @@ def login_ui():
 
 def logout_ui():
     controller = _get_cookie_controller()
+    is_demo_only = bool(st.session_state.get("_lf_demo_viewer")) and not st.session_state.get("sb_session")
+    label = "Exit Demo" if is_demo_only else "Logout"
 
-    if st.sidebar.button("Logout", use_container_width=True, key="logout_btn"):
+    if st.sidebar.button(label, use_container_width=True, key="logout_btn"):
         sess = st.session_state.get("sb_session") or {}
         try:
             if sess.get("access_token") and sess.get("refresh_token"):
@@ -635,6 +650,7 @@ def logout_ui():
         _cookie_remove(controller, LEAGUE_COOKIE_KEY)
         _clear_auth_state()
         st.session_state["_lf_pending_logout"] = True
+        st.query_params.pop("demo", None)
 
         invalidate_app_caches()
         st.rerun()

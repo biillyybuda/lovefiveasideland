@@ -22,7 +22,13 @@ from utils.style_utils import apply_base_style
 
 # Auth / League helpers
 from utils.auth_utils import is_authed, login_ui, logout_ui
-from utils.league_utils import change_league_sidebar_ui, league_selector_ui, accept_invite_flow
+from utils.league_utils import (
+    accept_invite_flow,
+    change_league_sidebar_ui,
+    enter_demo_league_viewer,
+    is_demo_league_selected,
+    league_selector_ui,
+)
 
 # -----------------------------
 # Page config / style
@@ -55,11 +61,16 @@ apply_base_style()
 from utils.branding import APP_LOGO
 st.sidebar.image(APP_LOGO, use_container_width=True)
 
+params = st.query_params
+demo_requested = str(params.get("demo") or "").strip().lower() in ("1", "true", "yes")
+if demo_requested and not is_demo_league_selected():
+    enter_demo_league_viewer()
+
 # -----------------------------
 # AUTH GATE (runs before pages)
 # -----------------------------
 # If user is not logged in, show login and stop.
-if not is_authed():
+if not is_demo_league_selected() and not is_authed():
     st.title("Love Five")
     st.caption(APP_TAGLINE)
     login_ui()
@@ -68,9 +79,8 @@ if not is_authed():
 # -----------------------------
 # INVITE FLOW (optional)
 # -----------------------------
-params = st.query_params
 invite_token = params.get("invite")
-if invite_token:
+if invite_token and not is_demo_league_selected():
     # If they opened an invite link, handle it here before league selection
     accept_invite_flow(invite_token)
     st.stop()
@@ -97,7 +107,7 @@ role = (st.session_state.get("league_role") or "").lower()
 
 # Only import/run this gate for non-admins. It may query profile/player-link data,
 # so avoid doing that work for admin/owner page switching.
-if role not in ("admin", "owner"):
+if role not in ("admin", "owner") and not is_demo_league_selected():
     from utils.player_link_utils import ensure_player_linked_ui
     ensure_player_linked_ui()
 
@@ -189,6 +199,13 @@ if "page" not in st.session_state:
 if st.session_state["page"] not in PAGES and st.session_state["page"] not in HIDDEN_PAGES:
     st.session_state["page"] = "Home"
 
+if (
+    is_demo_league_selected()
+    and not st.session_state.get("sb_session")
+    and st.session_state["page"] in HIDDEN_PAGES
+):
+    st.session_state["page"] = "Home"
+
 # Sidebar fallback list. Main navigation is handled by grouped buttons below.
 page_options = list(PAGES.keys())
 
@@ -199,6 +216,8 @@ if current_page in HIDDEN_PAGES and current_page not in page_options:
 
 league_name = st.session_state.get("league_name", st.session_state["league_id"])
 st.sidebar.markdown(f"**League**  \n{league_name}")
+if is_demo_league_selected():
+    st.sidebar.caption("Demo view only")
 change_league_sidebar_ui()
 st.sidebar.markdown("---")
 
@@ -219,8 +238,9 @@ _sidebar_nav_button("Season Review", "Season Review", "nav_season")
 
 st.sidebar.markdown("---")
 st.sidebar.caption("League")
-_sidebar_nav_button("Join / Invite", "Join / Invite", "nav_join")
-_sidebar_nav_button("Profile Settings", "Profile Settings", "nav_profile")
+if not (is_demo_league_selected() and not st.session_state.get("sb_session")):
+    _sidebar_nav_button("Join / Invite", "Join / Invite", "nav_join")
+    _sidebar_nav_button("Profile Settings", "Profile Settings", "nav_profile")
 _sidebar_nav_button("Info", "Info", "nav_info")
 
 role = (st.session_state.get("league_role") or "").lower()

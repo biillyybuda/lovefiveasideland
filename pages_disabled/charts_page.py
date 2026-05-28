@@ -57,6 +57,67 @@ def _parse_scoreline(score_txt: str):
         pass
     return None, None
 
+
+def _render_team_history_card_styles() -> None:
+    # Shared card styling for Teammate History and Matchup History.
+    st.markdown(
+        '''
+        <style>
+        .pm-card{
+          border-radius:16px;
+          padding:16px 18px;
+          border:1px solid rgba(255,255,255,0.10);
+          background:linear-gradient(180deg, rgba(255,255,255,0.05), rgba(0,0,0,0.0));
+          box-shadow:0 0 16px rgba(0,0,0,0.55);
+          margin-top:10px;
+        }
+        .pm-top{display:flex;align-items:center;margin-bottom:6px;}
+        .pm-scorebar{flex-direction:column;justify-content:center;gap:6px;margin-bottom:12px;}
+        .pm-scoreline{display:flex;justify-content:center;align-items:baseline;gap:18px;}
+        .pm-scoreteam{
+          font-size:2.2rem;font-weight:1000;letter-spacing:0.5px;
+          text-shadow:0 3px 20px rgba(0,0,0,0.65);opacity:0.95;white-space:nowrap;
+        }
+        .pm-scoreteam.pm-a{ color:#93c5fd; }
+        .pm-scoreteam.pm-b{ color:#fca5a5; }
+        .pm-meta{color:#cfcfcf;opacity:0.9;font-size:0.95rem;}
+        .pm-score{font-size:2.2rem;font-weight:1000;letter-spacing:1px;color:#ffffff;text-shadow:0 3px 20px rgba(0,0,0,0.65);}
+        .pm-grid{display:grid;grid-template-columns: 1fr 1fr;gap:14px;}
+        .pm-team{border-radius:14px;padding:12px 14px;border:1px solid rgba(255,255,255,0.10);background:rgba(255,255,255,0.03);}
+        .pm-team.a{background:linear-gradient(135deg, rgba(59,130,246,0.14), rgba(255,255,255,0.02));border:1px solid rgba(59,130,246,0.22);}
+        .pm-team.b{background:linear-gradient(225deg, rgba(239,68,68,0.14), rgba(255,255,255,0.02));border:1px solid rgba(239,68,68,0.22);}
+        .pm-team-h{font-weight:900;font-size:1.05rem;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;}
+        .pm-line{display:flex;flex-wrap:wrap;gap:8px;}
+        .pm-pill{
+          padding:6px 10px;border-radius:999px;font-weight:800;font-size:0.98rem;
+          border:1px solid rgba(255,255,255,0.10);background:rgba(255,255,255,0.04);
+        }
+        .pm-pill.active{
+          background:rgba(34,197,94,0.14);
+          border:1px solid rgba(34,197,94,0.40);
+          color:#bbf7d0;
+          box-shadow:0 0 10px rgba(34,197,94,0.10);
+        }
+        .pm-changes{margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);}
+        .pm-changes-h{font-weight:900;font-size:0.9rem;color:rgba(255,255,255,0.75);margin-bottom:6px;}
+        .pm-changes-none{color:rgba(255,255,255,0.55);font-size:0.9rem;}
+        .pm-swap{display:flex;align-items:center;gap:10px;margin:6px 0;flex-wrap:wrap;}
+        .pm-arrow{opacity:0.7;font-weight:900;}
+        .pm-pill.pm-out{border-color:rgba(239,68,68,0.35);background:rgba(239,68,68,0.08);color:#fecaca;}
+        .pm-pill.pm-in{border-color:rgba(34,197,94,0.35);background:rgba(34,197,94,0.10);color:#bbf7d0;}
+        .pm-extras{margin-top:6px;color:rgba(255,255,255,0.65);font-size:0.9rem;line-height:1.25;}
+        .pm-extras-h{font-weight:900;color:rgba(255,255,255,0.75);}
+        @media (max-width: 760px){
+          .pm-grid{grid-template-columns:1fr;}
+          .pm-scoreline{gap:10px;}
+          .pm-scoreteam,.pm-score{font-size:1.45rem;}
+        }
+        </style>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+
 def _outcome_for_selected_group(mrow, wanted_set: set[str], same_team_only: bool):
     """
     Returns: ("W"/"D"/"L"/None, side_str)
@@ -195,6 +256,8 @@ def render_group_vs_group(matches_df: pd.DataFrame, all_players: list[str], name
     """Matchup History: pick Group A + Group B and return historical matches where they faced each other.
     Cards are normalised so Group A is always shown on the left (Team A panel).
     """
+    _render_team_history_card_styles()
+
     c1, c2 = st.columns(2)
     with c1:
         group_a = st.multiselect(
@@ -332,59 +395,7 @@ def render_group_vs_group(matches_df: pd.DataFrame, all_players: list[str], name
 
 def render_team_history_directory(matches_df: pd.DataFrame, all_players: list[str], name_map: dict, key_prefix: str = "thd"):
     """Teammate History: pick players and list matches where they were together on the SAME team."""
-    # Lightweight CSS (matched to Team Generator "Past Matchups")
-    st.markdown(
-        '''
-        <style>
-        .pm-card{
-          border-radius:16px;
-          padding:16px 18px;
-          border:1px solid rgba(255,255,255,0.10);
-          background:linear-gradient(180deg, rgba(255,255,255,0.05), rgba(0,0,0,0.0));
-          box-shadow:0 0 16px rgba(0,0,0,0.55);
-          margin-top:10px;
-        }
-        .pm-top{display:flex;align-items:center;margin-bottom:6px;}
-        .pm-scorebar{flex-direction:column;justify-content:center;gap:6px;margin-bottom:12px;}
-        .pm-scoreline{display:flex;justify-content:center;align-items:baseline;gap:18px;}
-        .pm-scoreteam{
-          font-size:2.2rem;font-weight:1000;letter-spacing:0.5px;
-          text-shadow:0 3px 20px rgba(0,0,0,0.65);opacity:0.95;white-space:nowrap;
-        }
-        .pm-scoreteam.pm-a{ color:#93c5fd; }
-        .pm-scoreteam.pm-b{ color:#fca5a5; }
-        .pm-meta{color:#cfcfcf;opacity:0.9;font-size:0.95rem;}
-        .pm-score{font-size:2.2rem;font-weight:1000;letter-spacing:1px;color:#ffffff;text-shadow:0 3px 20px rgba(0,0,0,0.65);}
-        .pm-grid{display:grid;grid-template-columns: 1fr 1fr;gap:14px;}
-        .pm-team{border-radius:14px;padding:12px 14px;border:1px solid rgba(255,255,255,0.10);background:rgba(255,255,255,0.03);}
-        .pm-team.a{background:linear-gradient(135deg, rgba(59,130,246,0.14), rgba(255,255,255,0.02));border:1px solid rgba(59,130,246,0.22);}
-        .pm-team.b{background:linear-gradient(225deg, rgba(239,68,68,0.14), rgba(255,255,255,0.02));border:1px solid rgba(239,68,68,0.22);}
-        .pm-team-h{font-weight:900;font-size:1.05rem;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;}
-        .pm-line{display:flex;flex-wrap:wrap;gap:8px;}
-        .pm-pill{
-          padding:6px 10px;border-radius:999px;font-weight:800;font-size:0.98rem;
-          border:1px solid rgba(255,255,255,0.10);background:rgba(255,255,255,0.04);
-        }
-        /* Selected players */
-        .pm-pill.active{
-          background:rgba(34,197,94,0.14);
-          border:1px solid rgba(34,197,94,0.40);
-          color:#bbf7d0;
-          box-shadow:0 0 10px rgba(34,197,94,0.10);
-        }
-        .pm-changes{margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);}
-        .pm-changes-h{font-weight:900;font-size:0.9rem;color:rgba(255,255,255,0.75);margin-bottom:6px;}
-        .pm-changes-none{color:rgba(255,255,255,0.55);font-size:0.9rem;}
-        .pm-swap{display:flex;align-items:center;gap:10px;margin:6px 0;flex-wrap:wrap;}
-        .pm-arrow{opacity:0.7;font-weight:900;}
-        .pm-pill.pm-out{border-color:rgba(239,68,68,0.35);background:rgba(239,68,68,0.08);color:#fecaca;}
-        .pm-pill.pm-in{border-color:rgba(34,197,94,0.35);background:rgba(34,197,94,0.10);color:#bbf7d0;}
-        .pm-extras{margin-top:6px;color:rgba(255,255,255,0.65);font-size:0.9rem;line-height:1.25;}
-        .pm-extras-h{font-weight:900;color:rgba(255,255,255,0.75);}
-        </style>
-        ''',
-        unsafe_allow_html=True,
-    )
+    _render_team_history_card_styles()
 
     default = st.session_state.get(f"{key_prefix}_default", []) or []
 

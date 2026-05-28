@@ -1,5 +1,7 @@
 # utils/league_utils.py
 import streamlit as st
+import secrets
+import string
 from utils.cache_utils import invalidate_app_caches
 from utils.auth_utils import (
     forget_selected_league,
@@ -9,6 +11,11 @@ from utils.auth_utils import (
     sb_client_authed,
 )
 from utils.db_utils import get_conn
+
+JOIN_CODE_ALPHABET = string.ascii_uppercase + string.digits
+DEMO_LEAGUE_NAME = "Love Five Demo League"
+DEMO_LEAGUE_CODE = "DEMO2026"
+
 
 def update_my_display_name(new_display_name: str):
     sb = st.session_state.get("sb_session") or {}
@@ -112,6 +119,116 @@ def join_league_by_code(code: str):
     }
 
 
+def join_demo_league():
+    return get_demo_league()
+
+
+def get_demo_league():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        select id, name
+        from public.leagues
+        where join_code = %s
+        limit 1
+        """,
+        (DEMO_LEAGUE_CODE,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+
+    return {
+        "league_id": int(row[0]),
+        "league_name": row[1],
+        "role": "member",
+    }
+
+
+def enter_demo_league_viewer() -> bool:
+    result = get_demo_league()
+    if not result:
+        return False
+
+    invalidate_app_caches()
+    st.session_state.league_id = result["league_id"]
+    st.session_state.league_name = result["league_name"]
+    st.session_state.league_role = "member"
+    st.session_state["_lf_demo_viewer"] = True
+    return True
+
+
+def is_demo_league_selected() -> bool:
+    league_name = str(st.session_state.get("league_name") or "").strip().lower()
+    return bool(st.session_state.get("_lf_demo_viewer")) or league_name == DEMO_LEAGUE_NAME.lower()
+
+
+def _generate_join_code(length: int = 8) -> str:
+    return "".join(secrets.choice(JOIN_CODE_ALPHABET) for _ in range(length))
+
+
+def create_league_for_current_user(league_name: str):
+    sb = st.session_state.get("sb_session") or {}
+    user_id = sb.get("user_id")
+    if not user_id:
+        raise RuntimeError("Not logged in.")
+
+    clean_name = (league_name or "").strip()
+    if len(clean_name) < 3:
+        raise ValueError("League name must be at least 3 characters.")
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+
+        league = None
+        for _ in range(8):
+            join_code = _generate_join_code()
+            cur.execute("select 1 from public.leagues where join_code = %s limit 1", (join_code,))
+            if cur.fetchone():
+                continue
+
+            cur.execute(
+                """
+                insert into public.leagues (name, join_code)
+                values (%s, %s)
+                returning id, name, join_code
+                """,
+                (clean_name, join_code),
+            )
+            league = cur.fetchone()
+            break
+
+        if not league:
+            raise RuntimeError("Could not generate a league code. Please try again.")
+
+        league_id, created_name, join_code = league
+        cur.execute(
+            """
+            insert into public.league_members (league_id, user_id, role, status)
+            values (%s, %s, %s, %s)
+            on conflict (league_id, user_id)
+            do update set role = excluded.role, status = excluded.status
+            """,
+            (league_id, user_id, "admin", "active"),
+        )
+
+        conn.commit()
+        return {
+            "league_id": int(league_id),
+            "league_name": created_name,
+            "join_code": join_code,
+            "role": "admin",
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def update_league_name(league_id: str, new_name: str):
     conn = get_conn()
     cur = conn.cursor()
@@ -155,6 +272,8 @@ def load_my_leagues():
 
 
 def get_my_leagues_for_session():
+    if st.session_state.get("_lf_demo_viewer") and not st.session_state.get("sb_session"):
+        return []
     leagues = st.session_state.get("_lf_my_leagues")
     if isinstance(leagues, list):
         return leagues
@@ -162,15 +281,19 @@ def get_my_leagues_for_session():
 
 
 def change_league_sidebar_ui() -> None:
+    if st.session_state.get("_lf_demo_viewer") and not st.session_state.get("sb_session"):
+        return
+
     leagues = get_my_leagues_for_session()
-    can_change = len(leagues) > 1 or is_superuser()
+    can_change = bool(st.session_state.get("_lf_demo_viewer")) or len(leagues) > 1 or is_superuser()
     if not can_change:
         return
 
     if st.sidebar.button("Change League", use_container_width=True, key="change_league_btn"):
         forget_selected_league()
-        for key in ("league_id", "league_name", "league_role"):
+        for key in ("league_id", "league_name", "league_role", "_lf_demo_viewer"):
             st.session_state.pop(key, None)
+        st.query_params.pop("demo", None)
         st.session_state["page"] = "Home"
         invalidate_app_caches()
         st.rerun()
@@ -245,6 +368,8 @@ def _enter_league(selected: dict):
     st.session_state.league_id = league_id
     st.session_state.league_name = league_name
     st.session_state.league_role = league_role
+    st.session_state.pop("_lf_demo_viewer", None)
+    st.query_params.pop("demo", None)
     save_selected_league(league_id, league_name, league_role)
 
 
@@ -273,8 +398,72 @@ def _join_code_form(key_prefix: str) -> bool:
     st.session_state.league_id = result["league_id"]
     st.session_state.league_name = result["league_name"]
     st.session_state.league_role = result["role"]
+    st.session_state.pop("_lf_demo_viewer", None)
+    st.query_params.pop("demo", None)
     save_selected_league(result["league_id"], result["league_name"], result["role"])
     st.success(f"Joined {result['league_name']}.")
+    st.rerun()
+    return True
+
+
+def _enter_joined_league(result: dict) -> None:
+    invalidate_app_caches()
+    st.session_state.league_id = result["league_id"]
+    st.session_state.league_name = result["league_name"]
+    st.session_state.league_role = result["role"]
+    if result.get("is_demo"):
+        st.session_state["_lf_demo_viewer"] = True
+        st.query_params["demo"] = "1"
+    else:
+        st.session_state.pop("_lf_demo_viewer", None)
+        st.query_params.pop("demo", None)
+        save_selected_league(result["league_id"], result["league_name"], result["role"])
+
+
+def _demo_league_button(key_prefix: str) -> bool:
+    if not st.button("Try the demo league", use_container_width=True, key=f"{key_prefix}_demo_league"):
+        return False
+
+    result = join_demo_league()
+    if not result:
+        st.error("The demo league is not available right now.")
+        return False
+
+    result["is_demo"] = True
+    _enter_joined_league(result)
+    st.rerun()
+    return True
+
+
+def _create_league_form(key_prefix: str) -> bool:
+    with st.form(f"{key_prefix}_create_form", clear_on_submit=False):
+        league_name = st.text_input(
+            "League name",
+            placeholder="e.g. Thursday Night Fives",
+            key=f"{key_prefix}_league_name",
+        )
+        submitted = st.form_submit_button("Create league", use_container_width=True)
+
+    if not submitted:
+        return False
+
+    try:
+        result = create_league_for_current_user(league_name)
+    except ValueError as exc:
+        st.error(str(exc))
+        return False
+    except Exception as exc:
+        st.error(f"Could not create league: {exc}")
+        return False
+
+    invalidate_app_caches()
+    st.session_state.league_id = result["league_id"]
+    st.session_state.league_name = result["league_name"]
+    st.session_state.league_role = result["role"]
+    st.session_state.pop("_lf_demo_viewer", None)
+    st.query_params.pop("demo", None)
+    save_selected_league(result["league_id"], result["league_name"], result["role"])
+    st.success(f"Created {result['league_name']}.")
     st.rerun()
     return True
 
@@ -314,7 +503,13 @@ def league_selector_ui():
     leagues = load_my_leagues()
     if not leagues:
         st.info("No leagues are linked to your account yet.")
-        _join_code_form("first_league")
+        _demo_league_button("first_league")
+        st.markdown("---")
+        join_tab, create_tab = st.tabs(["Join league", "Create league"])
+        with join_tab:
+            _join_code_form("first_league")
+        with create_tab:
+            _create_league_form("first_league")
         st.caption("Ask your league organiser for a code or invite link.")
         return False
 
@@ -337,6 +532,12 @@ def league_selector_ui():
 
     with st.expander("Join another league with a code", expanded=False):
         _join_code_form("extra_league")
+
+    with st.expander("View demo league", expanded=False):
+        _demo_league_button("extra_league")
+
+    with st.expander("Create another league", expanded=False):
+        _create_league_form("extra_league")
 
     return bool(st.session_state.get("league_id"))
 
