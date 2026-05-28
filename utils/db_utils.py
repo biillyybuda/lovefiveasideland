@@ -238,7 +238,24 @@ def _load_players_df_cached(league_id: int):
     with pooled_conn() as conn:
         return pd.read_sql(
             """
-            SELECT *
+            SELECT
+                id,
+                league_id,
+                name,
+                display_name,
+                mmr,
+                matches_played,
+                wins,
+                draws,
+                losses,
+                win_streak,
+                lose_streak,
+                last_match_date,
+                strengths,
+                fitness,
+                user_id,
+                is_active,
+                archived_at
             FROM public.players
             WHERE league_id = %s
             ORDER BY name
@@ -257,7 +274,19 @@ def _load_matches_df_cached(league_id: int):
     with pooled_conn() as conn:
         return pd.read_sql(
             """
-            SELECT *
+            SELECT
+                id,
+                league_id,
+                date,
+                team_a,
+                team_b,
+                score,
+                result,
+                processed,
+                team_a_avg,
+                team_b_avg,
+                team_a_color,
+                team_b_color
             FROM public.matches
             WHERE league_id = %s
             ORDER BY date

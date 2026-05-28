@@ -90,20 +90,6 @@ if not st.session_state.get("league_id"):
 
 # At this point we are logged in and have a league selected
 
-# Warm the two core DB caches once per session/league.
-# This makes the first real page load do the DB work, then page switching is faster.
-try:
-    _preload_key = f"preloaded_core_{st.session_state.get('league_id')}"
-    if not st.session_state.get(_preload_key):
-        from utils.db_utils import load_players_df, load_matches_df
-        load_players_df()
-        load_matches_df()
-        st.session_state[_preload_key] = True
-except Exception:
-    # Never block the app shell just because a preload failed; the page itself
-    # will show the real error if the DB is unavailable.
-    pass
-
 # -----------------------------
 # PLAYER LINK GATE (Step B)
 # -----------------------------
