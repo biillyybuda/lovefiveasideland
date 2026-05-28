@@ -5,6 +5,7 @@ import os
 import streamlit as st
 import locale
 import importlib
+from utils.perf_utils import render_perf_sidebar, reset_perf_trace, timed
 
 def set_time_locale():
     for loc in ("en_GB.UTF-8", "en_GB.utf8", "en_GB", "C.UTF-8", "C"):
@@ -57,6 +58,7 @@ logging.basicConfig(
 )
 
 apply_base_style()
+reset_perf_trace()
 
 from utils.branding import APP_LOGO
 st.sidebar.image(APP_LOGO, use_container_width=True)
@@ -286,4 +288,6 @@ _sync_page_url(choice)
 registry = PAGES if choice in PAGES else HIDDEN_PAGES
 module_path, func_name = registry[choice]
 mod = importlib.import_module(module_path)
-getattr(mod, func_name)()
+with timed(f"Render {choice}", log_over=1.5):
+    getattr(mod, func_name)()
+render_perf_sidebar()

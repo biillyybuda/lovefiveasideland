@@ -2,6 +2,201 @@ import streamlit as st
 from utils.branding import APP_LOGO
 import base64
 from pathlib import Path
+from utils.db_utils import get_conn, get_current_league_id, load_matches_df, load_players_df
+from utils.league_utils import is_demo_league_selected
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _active_member_count(league_id: int) -> int:
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            select count(*)
+            from public.league_members
+            where league_id = %s
+              and status = 'active'
+            """,
+            (int(league_id),),
+        )
+        row = cur.fetchone()
+        return int(row[0] or 0) if row else 0
+    except Exception:
+        return 0
+    finally:
+        conn.close()
+
+
+def _setup_step(done: bool, title: str, detail: str) -> str:
+    marker = "✓" if done else "○"
+    cls = "done" if done else "todo"
+    return f"""
+    <div class="setup-step {cls}">
+        <div class="setup-marker">{marker}</div>
+        <div>
+            <div class="setup-title">{title}</div>
+            <div class="setup-detail">{detail}</div>
+        </div>
+    </div>
+    """
+
+
+def _render_setup_checklist() -> None:
+    if is_demo_league_selected():
+        return
+
+    role = (st.session_state.get("league_role") or "").lower()
+    if role not in ("admin", "owner"):
+        return
+
+    try:
+        league_id = get_current_league_id()
+        players_df = load_players_df()
+        matches_df = load_matches_df()
+    except Exception:
+        return
+
+    player_count = int(len(players_df)) if players_df is not None else 0
+    processed_matches = 0
+    if matches_df is not None and not matches_df.empty:
+        processed_matches = int(matches_df["processed"].fillna(0).astype(int).sum()) if "processed" in matches_df.columns else len(matches_df)
+
+    member_count = _active_member_count(league_id)
+
+    enough_players = player_count >= 10
+    invite_shared = member_count >= 2
+    first_result = processed_matches >= 1
+    ready_to_explore = enough_players and first_result
+
+    if enough_players and invite_shared and first_result:
+        return
+
+    st.markdown(
+        f"""
+        <style>
+        .setup-wrap {{
+            margin: 8px 0 18px 0;
+            padding: 16px;
+            border: 1px solid rgba(255,255,255,0.10);
+            border-radius: 12px;
+            background: rgba(255,255,255,0.035);
+        }}
+        .setup-head {{
+            display:flex;
+            justify-content:space-between;
+            gap:12px;
+            align-items:flex-start;
+            margin-bottom:12px;
+        }}
+        .setup-kicker {{
+            color:#9aa0a6;
+            font-size:12px;
+            font-weight:800;
+            text-transform:uppercase;
+            letter-spacing:0.04em;
+        }}
+        .setup-heading {{
+            font-size:20px;
+            font-weight:900;
+            margin-top:2px;
+        }}
+        .setup-progress {{
+            color:#dbeafe;
+            font-weight:900;
+            white-space:nowrap;
+            padding-top:2px;
+        }}
+        .setup-grid {{
+            display:grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap:10px;
+        }}
+        .setup-step {{
+            display:flex;
+            gap:10px;
+            min-height:92px;
+            padding:12px;
+            border-radius:10px;
+            border:1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.025);
+        }}
+        .setup-step.done {{
+            border-color:rgba(34,197,94,0.28);
+            background:rgba(34,197,94,0.06);
+        }}
+        .setup-marker {{
+            width:24px;
+            height:24px;
+            border-radius:999px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            flex:0 0 24px;
+            font-weight:900;
+            color:#bbf7d0;
+            background:rgba(34,197,94,0.12);
+            border:1px solid rgba(34,197,94,0.32);
+        }}
+        .setup-step.todo .setup-marker {{
+            color:#bfdbfe;
+            background:rgba(59,130,246,0.10);
+            border-color:rgba(59,130,246,0.28);
+        }}
+        .setup-title {{
+            font-weight:900;
+            font-size:14px;
+            margin-bottom:4px;
+        }}
+        .setup-detail {{
+            color:#aab3bd;
+            font-size:12px;
+            line-height:1.35;
+        }}
+        @media (max-width: 900px){{
+            .setup-grid {{grid-template-columns:1fr 1fr;}}
+        }}
+        @media (max-width: 620px){{
+            .setup-head {{display:block;}}
+            .setup-grid {{grid-template-columns:1fr;}}
+        }}
+        </style>
+        <div class="setup-wrap">
+            <div class="setup-head">
+                <div>
+                    <div class="setup-kicker">League setup</div>
+                    <div class="setup-heading">Get your league ready</div>
+                </div>
+                <div class="setup-progress">{sum([enough_players, invite_shared, first_result, ready_to_explore])}/4 done</div>
+            </div>
+            <div class="setup-grid">
+                {_setup_step(enough_players, "Add players", f"{player_count}/10 players added")}
+                {_setup_step(invite_shared, "Invite your group", f"{member_count} account(s) linked to this league")}
+                {_setup_step(first_result, "Add first result", f"{processed_matches} processed match(es)")}
+                {_setup_step(ready_to_explore, "Review the stats", "Dashboard and charts come alive after results")}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    b1, b2, b3, b4 = st.columns(4)
+    with b1:
+        if st.button("Add players", use_container_width=True, key="setup_add_players"):
+            st.session_state["_nav_target"] = "Player Management"
+            st.rerun()
+    with b2:
+        if st.button("Invite people", use_container_width=True, key="setup_invite"):
+            st.session_state["_nav_target"] = "Join / Invite"
+            st.rerun()
+    with b3:
+        if st.button("Add result", use_container_width=True, key="setup_add_result", disabled=player_count < 2):
+            st.session_state["_nav_target"] = "Matches Management"
+            st.rerun()
+    with b4:
+        if st.button("View dashboard", use_container_width=True, key="setup_dashboard", disabled=processed_matches < 1):
+            st.session_state["_nav_target"] = "Dashboard"
+            st.rerun()
 
 def render_home_page():
     # League context
@@ -48,6 +243,8 @@ def render_home_page():
         """,
         unsafe_allow_html=True,
     )
+
+    _render_setup_checklist()
 
     # ---------------------------------
     # Smaller logo (optional, now secondary)

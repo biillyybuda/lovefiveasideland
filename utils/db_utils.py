@@ -8,6 +8,7 @@ import psycopg2
 from psycopg2 import OperationalError
 from psycopg2.pool import SimpleConnectionPool
 import streamlit as st
+from utils.perf_utils import add_perf_trace
 
 def _load_local_env():
     """Load ignored local DB settings when running outside Render."""
@@ -213,6 +214,7 @@ def query_df_cached(query: str, params: tuple = ()):
         df = pd.read_sql(query, conn, params=params)
 
     elapsed = time.perf_counter() - start
+    add_perf_trace("DB query", elapsed)
     if elapsed >= float(os.getenv("LOVEFIVE_SLOW_QUERY_SECONDS", "0.35")):
         preview = " ".join(str(query).split())[:180]
         logging.info(
@@ -235,8 +237,9 @@ def query_df_cached(query: str, params: tuple = ()):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _load_players_df_cached(league_id: int):
+    start = time.perf_counter()
     with pooled_conn() as conn:
-        return pd.read_sql(
+        df = pd.read_sql(
             """
             SELECT
                 id,
@@ -263,6 +266,8 @@ def _load_players_df_cached(league_id: int):
             conn,
             params=(int(league_id),),
         )
+    add_perf_trace("Load players", time.perf_counter() - start)
+    return df
 
 
 def load_players_df():
@@ -271,8 +276,9 @@ def load_players_df():
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _load_matches_df_cached(league_id: int):
+    start = time.perf_counter()
     with pooled_conn() as conn:
-        return pd.read_sql(
+        df = pd.read_sql(
             """
             SELECT
                 id,
@@ -294,6 +300,8 @@ def _load_matches_df_cached(league_id: int):
             conn,
             params=(int(league_id),),
         )
+    add_perf_trace("Load matches", time.perf_counter() - start)
+    return df
 
 
 def load_matches_df():
@@ -302,8 +310,9 @@ def load_matches_df():
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _load_active_players_light_cached(league_id: int):
+    start = time.perf_counter()
     with pooled_conn() as conn:
-        return pd.read_sql(
+        df = pd.read_sql(
             """
             SELECT id, name, display_name, mmr, matches_played, wins,
                    win_streak, lose_streak, fitness, strengths, is_active
@@ -315,6 +324,8 @@ def _load_active_players_light_cached(league_id: int):
             conn,
             params=(int(league_id),),
         )
+    add_perf_trace("Load active players", time.perf_counter() - start)
+    return df
 
 
 def load_active_players_light_df():
