@@ -22,6 +22,7 @@ COOKIE_KEY = "lovefive_sb_session"
 LEAGUE_COOKIE_KEY = "lovefive_selected_league"
 COOKIE_MAX_AGE = 30 * 24 * 60 * 60  # 30 days
 AUTH_REFRESH_GRACE_SECONDS = 50 * 60  # only refresh Supabase session about once per hour
+AUTH_COOKIE_PROBE_SECONDS = 2.5
 
 
 
@@ -89,6 +90,8 @@ def _clear_auth_state() -> None:
         "_lf_auth_checked",
         "_lf_auth_last_refresh",
         "_lf_cookie_probe_started",
+        "_lf_league_cookie_checked",
+        "_lf_skip_league_restore_once",
         "_lf_pending_logout",
     ):
         st.session_state.pop(key, None)
@@ -139,14 +142,10 @@ def _unpack(token: str) -> Optional[Dict[str, Any]]:
 
 
 def _auth_cookie_payload(sess: Dict[str, Any]) -> Dict[str, Any]:
-    payload = {
+    return {
         "refresh_token": sess.get("refresh_token"),
         "email": sess.get("email"),
     }
-    last_league = sess.get("last_league")
-    if isinstance(last_league, dict):
-        payload["last_league"] = last_league
-    return payload
 
 
 # -----------------------------
@@ -200,9 +199,11 @@ def _restore_session_from_cookie(force: bool = False) -> bool:
         # pass the app may show the login form even though the refresh cookie is
         # still valid in the browser.
         first_probe = float(st.session_state.get("_lf_cookie_probe_started", 0) or 0)
-        if not force and not first_probe:
-            st.session_state["_lf_cookie_probe_started"] = now
+        if not force and (not first_probe or (now - first_probe) < AUTH_COOKIE_PROBE_SECONDS):
+            if not first_probe:
+                st.session_state["_lf_cookie_probe_started"] = now
             st.info("Checking your saved login...")
+            time.sleep(0.2)
             st.stop()
         st.session_state.pop("_lf_cookie_probe_started", None)
         st.session_state["_lf_auth_checked"] = True
@@ -223,7 +224,6 @@ def _restore_session_from_cookie(force: bool = False) -> bool:
 
     try:
         res = sb.auth.refresh_session(refresh_token=str(refresh_token))
-        last_league = payload.get("last_league") if isinstance(payload.get("last_league"), dict) else None
 
         sess = {
             "access_token": res.session.access_token,  # type: ignore
@@ -232,8 +232,6 @@ def _restore_session_from_cookie(force: bool = False) -> bool:
             "email": res.user.email,  # type: ignore
             "app_metadata": getattr(res.user, "app_metadata", {}) or {},  # type: ignore
         }
-        if last_league and last_league.get("user_id") == sess["user_id"]:
-            sess["last_league"] = last_league
         st.session_state["sb_session"] = sess
         st.session_state.pop("_lf_pending_logout", None)
         st.session_state["_lf_auth_checked"] = True
@@ -292,26 +290,21 @@ def save_selected_league(league_id: int, league_name: str, league_role: Optional
         "league_name": league_name,
         "league_role": league_role,
     }
-    sess["last_league"] = last_league
-    st.session_state["sb_session"] = sess
-
     controller = _get_cookie_controller()
+    st.session_state.pop("_lf_skip_league_restore_once", None)
+    st.session_state.pop("_lf_league_cookie_checked", None)
     _cookie_set(
         controller,
         LEAGUE_COOKIE_KEY,
         _pack(last_league),
     )
-    _cookie_set(controller, COOKIE_KEY, _pack(_auth_cookie_payload(sess)))
 
 
 def forget_selected_league() -> None:
     controller = _get_cookie_controller()
     _cookie_remove(controller, LEAGUE_COOKIE_KEY)
-    sess = st.session_state.get("sb_session") or {}
-    if isinstance(sess, dict) and "last_league" in sess:
-        sess.pop("last_league", None)
-        st.session_state["sb_session"] = sess
-        _cookie_set(controller, COOKIE_KEY, _pack(_auth_cookie_payload(sess)))
+    st.session_state["_lf_skip_league_restore_once"] = True
+    st.session_state["_lf_league_cookie_checked"] = True
 
 
 def is_superuser() -> bool:
@@ -339,6 +332,9 @@ def restore_selected_league(leagues: list[dict]) -> bool:
     if st.session_state.get("league_id"):
         return True
 
+    if st.session_state.pop("_lf_skip_league_restore_once", None):
+        return False
+
     sess = st.session_state.get("sb_session") or {}
     user_id = sess.get("user_id")
     if not user_id:
@@ -351,9 +347,24 @@ def restore_selected_league(leagues: list[dict]) -> bool:
     except Exception:
         token = None
 
+    if not token:
+        try:
+            controller.getAll()
+            token = controller.get(LEAGUE_COOKIE_KEY)
+        except Exception:
+            token = None
+
+    if not token:
+        # On a hard refresh Streamlit can rerun before the cookie component has
+        # copied browser cookies back into Python. Wait once for league restore;
+        # if there is no cookie, the normal selector appears on the next run.
+        if not st.session_state.get("_lf_league_cookie_checked"):
+            st.session_state["_lf_league_cookie_checked"] = True
+            st.info("Restoring your league...")
+            st.stop()
+        return False
+
     payload = _unpack(str(token)) if token else None
-    if not payload:
-        payload = sess.get("last_league") if isinstance(sess.get("last_league"), dict) else None
 
     if not payload or payload.get("user_id") != user_id:
         return False
@@ -371,6 +382,7 @@ def restore_selected_league(leagues: list[dict]) -> bool:
     st.session_state.league_id = int(selected["id"])  # type: ignore
     st.session_state.league_name = selected["name"]  # type: ignore
     st.session_state.league_role = selected.get("role")  # type: ignore
+    st.session_state.pop("_lf_league_cookie_checked", None)
     return True
 
 
