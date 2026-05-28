@@ -138,6 +138,17 @@ def _unpack(token: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _auth_cookie_payload(sess: Dict[str, Any]) -> Dict[str, Any]:
+    payload = {
+        "refresh_token": sess.get("refresh_token"),
+        "email": sess.get("email"),
+    }
+    last_league = sess.get("last_league")
+    if isinstance(last_league, dict):
+        payload["last_league"] = last_league
+    return payload
+
+
 # -----------------------------
 # Session restore
 # -----------------------------
@@ -212,6 +223,7 @@ def _restore_session_from_cookie(force: bool = False) -> bool:
 
     try:
         res = sb.auth.refresh_session(refresh_token=str(refresh_token))
+        last_league = payload.get("last_league") if isinstance(payload.get("last_league"), dict) else None
 
         sess = {
             "access_token": res.session.access_token,  # type: ignore
@@ -220,6 +232,8 @@ def _restore_session_from_cookie(force: bool = False) -> bool:
             "email": res.user.email,  # type: ignore
             "app_metadata": getattr(res.user, "app_metadata", {}) or {},  # type: ignore
         }
+        if last_league and last_league.get("user_id") == sess["user_id"]:
+            sess["last_league"] = last_league
         st.session_state["sb_session"] = sess
         st.session_state.pop("_lf_pending_logout", None)
         st.session_state["_lf_auth_checked"] = True
@@ -230,7 +244,7 @@ def _restore_session_from_cookie(force: bool = False) -> bool:
         _cookie_set(
             controller,
             COOKIE_KEY,
-            _pack({"refresh_token": sess["refresh_token"], "email": sess.get("email")}),
+            _pack(_auth_cookie_payload(sess)),
         )
         return True
 
@@ -272,24 +286,32 @@ def save_selected_league(league_id: int, league_name: str, league_role: Optional
     if not user_id:
         return
 
+    last_league = {
+        "user_id": user_id,
+        "league_id": int(league_id),
+        "league_name": league_name,
+        "league_role": league_role,
+    }
+    sess["last_league"] = last_league
+    st.session_state["sb_session"] = sess
+
     controller = _get_cookie_controller()
     _cookie_set(
         controller,
         LEAGUE_COOKIE_KEY,
-        _pack(
-            {
-                "user_id": user_id,
-                "league_id": int(league_id),
-                "league_name": league_name,
-                "league_role": league_role,
-            }
-        ),
+        _pack(last_league),
     )
+    _cookie_set(controller, COOKIE_KEY, _pack(_auth_cookie_payload(sess)))
 
 
 def forget_selected_league() -> None:
     controller = _get_cookie_controller()
     _cookie_remove(controller, LEAGUE_COOKIE_KEY)
+    sess = st.session_state.get("sb_session") or {}
+    if isinstance(sess, dict) and "last_league" in sess:
+        sess.pop("last_league", None)
+        st.session_state["sb_session"] = sess
+        _cookie_set(controller, COOKIE_KEY, _pack(_auth_cookie_payload(sess)))
 
 
 def is_superuser() -> bool:
@@ -330,6 +352,9 @@ def restore_selected_league(leagues: list[dict]) -> bool:
         token = None
 
     payload = _unpack(str(token)) if token else None
+    if not payload:
+        payload = sess.get("last_league") if isinstance(sess.get("last_league"), dict) else None
+
     if not payload or payload.get("user_id") != user_id:
         return False
 
@@ -433,7 +458,7 @@ def _legacy_login_ui():
         _cookie_set(
             controller,
             COOKIE_KEY,
-            _pack({"refresh_token": sess["refresh_token"], "email": sess.get("email")}),
+            _pack(_auth_cookie_payload(sess)),
         )
 
         st.success("Logged in.")
@@ -572,7 +597,7 @@ def login_ui():
         _cookie_set(
             controller,
             COOKIE_KEY,
-            _pack({"refresh_token": sess["refresh_token"], "email": sess.get("email")}),
+            _pack(_auth_cookie_payload(sess)),
         )
 
         st.success("Signed in.")
