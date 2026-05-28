@@ -139,17 +139,54 @@ HIDDEN_PAGES = {
     "Matches Management": ("pages_disabled.matches_page", "render_matches_page"),
     "Player Management": ("pages_disabled.player_management_page", "render_player_management_page"),}
 
+PAGE_SLUGS = {
+    "Home": "home",
+    "Dashboard": "dashboard",
+    "Charts & Stats": "charts",
+    "Matchday Hub": "matchday",
+    "Season Review": "season-review",
+    "Info": "info",
+    "League Admin": "league-admin",
+    "Profile Settings": "profile",
+    "Join / Invite": "join",
+    "Matches Management": "add-result",
+    "Player Management": "players",
+}
+SLUG_PAGES = {slug: page for page, slug in PAGE_SLUGS.items()}
+
+
+def _page_from_url():
+    slug = st.query_params.get("page")
+    if isinstance(slug, list):
+        slug = slug[0] if slug else None
+    return SLUG_PAGES.get(str(slug or "").strip().lower())
+
+
+def _sync_page_url(page_name: str) -> None:
+    slug = PAGE_SLUGS.get(page_name)
+    if slug:
+        st.query_params["page"] = slug
+
+
+def _go_to_page(page_name: str) -> None:
+    st.session_state["page"] = page_name
+    _sync_page_url(page_name)
+
+
 # -----------------------------
 # NAV OVERRIDES
 # -----------------------------
 if "_nav_target" in st.session_state:
     target = st.session_state.pop("_nav_target")
     if target in PAGES or target in HIDDEN_PAGES:
-        st.session_state["page"] = target
+        _go_to_page(target)
     else:
-        st.session_state["page"] = "Home"
+        _go_to_page("Home")
 
 if "page" not in st.session_state:
+    st.session_state["page"] = _page_from_url() or "Home"
+
+if st.session_state["page"] not in PAGES and st.session_state["page"] not in HIDDEN_PAGES:
     st.session_state["page"] = "Home"
 
 # Sidebar fallback list. Main navigation is handled by grouped buttons below.
@@ -169,7 +206,7 @@ def _sidebar_nav_button(label: str, target: str, key: str):
     active = current_page == target
     shown = f"> {label}" if active else label
     if st.sidebar.button(shown, use_container_width=True, key=key, disabled=active):
-        st.session_state["page"] = target
+        _go_to_page(target)
         st.rerun()
 
 
@@ -200,6 +237,7 @@ with st.sidebar.expander("All pages", expanded=False):
         page_options,
         key="page",
         label_visibility="collapsed",
+        on_change=lambda: _sync_page_url(st.session_state["page"]),
     )
 st.sidebar.markdown("---")
 
@@ -224,6 +262,7 @@ st.sidebar.markdown("---")
 # ROUTER
 # -----------------------------
 choice = st.session_state["page"]
+_sync_page_url(choice)
 registry = PAGES if choice in PAGES else HIDDEN_PAGES
 module_path, func_name = registry[choice]
 mod = importlib.import_module(module_path)
