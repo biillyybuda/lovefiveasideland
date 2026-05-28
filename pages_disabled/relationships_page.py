@@ -3,14 +3,25 @@ import pandas as pd
 from utils.db_utils import load_players_df, load_matches_df, get_conn, backup_db_manual, STARTING_MMR
 from utils.calc_utils import expected_score, process_unprocessed_matches, compute_streaks_from_matches
 from utils.export_utils import df_to_png, fig_to_png_bytes
+from utils.names import display_name_map_from_players_df, player_display_name
 
 
 def render_relationships_page():
     st.markdown("<h2>Player Relationships & Rivalries</h2>", unsafe_allow_html=True)
     st.markdown("<div class='small-muted'>Filter by players to view personalized data.</div>", unsafe_allow_html=True)
 
-    players = load_players_df()['name'].tolist()
-    selected_players = st.multiselect("Filter by Player(s)", players, default=[])
+    players_df = load_players_df()
+    name_map = display_name_map_from_players_df(players_df)
+    players = players_df['name'].tolist()
+    selected_players = st.multiselect(
+        "Filter by Player(s)",
+        players,
+        default=[],
+        format_func=lambda n: name_map.get(n, player_display_name(n)),
+    )
+
+    def show_name(name: str) -> str:
+        return name_map.get(str(name or "").strip(), player_display_name(str(name or "").strip()))
 
     matches = load_matches_df()
     from collections import defaultdict
@@ -51,7 +62,7 @@ def render_relationships_page():
     for (a, b), cnt in duo_counts.items():
         if selected_players and not (a in selected_players or b in selected_players):
             continue
-        duo_rows.append({'Player A': a, 'Player B': b, 'Matches Together': cnt})
+        duo_rows.append({'Player A': show_name(a), 'Player B': show_name(b), 'Matches Together': cnt})
     df_duos = pd.DataFrame(duo_rows).sort_values('Matches Together', ascending=False)
 
     pair_wins = {}
@@ -84,7 +95,7 @@ def render_relationships_page():
         mct = vals['matches']
         wins = vals['wins']
         winpct = round((wins / mct * 100), 1) if mct > 0 else 0.0
-        teammates_rows.append({'Player A': a, 'Player B': b, 'Matches Together': mct, 'Win % Together': winpct})
+        teammates_rows.append({'Player A': show_name(a), 'Player B': show_name(b), 'Matches Together': mct, 'Win % Together': winpct})
     df_teammates = pd.DataFrame(teammates_rows).sort_values('Win % Together', ascending=False).reset_index(drop=True)
 
     st.subheader("Teammate Pairs (filtered by minimum matches)")
@@ -123,7 +134,7 @@ def render_relationships_page():
             avg_gd = sum(vals) / len(vals) if vals else 0
         rif = matches_played * (1 - win_pct_diff) * (1 - min(avg_gd, 5) / 5) if matches_played > 0 else 0
         riv_rows.append({
-            'Player A': a, 'Player B': b, 'Matches': matches_played,
+            'Player A': show_name(a), 'Player B': show_name(b), 'Matches': matches_played,
             'Wins A': wins_a, 'Wins B': wins_b, 'Avg Goal Diff': round(avg_gd, 2),
             'Intensity': round(rif, 3)
         })

@@ -22,7 +22,7 @@ from utils.style_utils import apply_base_style
 
 # Auth / League helpers
 from utils.auth_utils import is_authed, login_ui, logout_ui
-from utils.league_utils import league_selector_ui, accept_invite_flow
+from utils.league_utils import change_league_sidebar_ui, league_selector_ui, accept_invite_flow
 
 # -----------------------------
 # Page config / style
@@ -176,6 +176,7 @@ if current_page in HIDDEN_PAGES and current_page not in page_options:
 
 league_name = st.session_state.get("league_name", st.session_state["league_id"])
 st.sidebar.markdown(f"**League**  \n{league_name}")
+change_league_sidebar_ui()
 st.sidebar.markdown("---")
 
 def _sidebar_nav_button(label: str, target: str, key: str):

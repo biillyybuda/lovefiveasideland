@@ -8,11 +8,12 @@ from utils.db_utils import (
     backup_db_manual,
     STARTING_MMR,
 )
+from utils.cache_utils import invalidate_app_caches
 
 from utils.ui_components import page_header
 from utils.calc_utils import expected_score, process_unprocessed_matches, compute_streaks_from_matches
 from utils.export_utils import df_to_png, fig_to_png_bytes
-from utils.names import canonical_name, display_name
+from utils.names import canonical_name, player_display_name
 
 
 @st.cache_resource
@@ -73,6 +74,16 @@ def render_player_management_page():
     ensure_player_schema()
     df = load_players_df()
 
+    notice = st.session_state.pop("_player_mgmt_notice", None)
+    if notice:
+        kind, message = notice
+        if kind == "success":
+            st.success(message)
+        elif kind == "warning":
+            st.warning(message)
+        else:
+            st.info(message)
+
     # Show/hide archived players
     show_archived = st.toggle("Show archived players", value=False, key="show_archived_players")
 
@@ -89,7 +100,7 @@ def render_player_management_page():
         if "display_name" not in df.columns:
             df["display_name"] = ""
         df["display_name"] = df["display_name"].fillna("").astype(str)
-        df.loc[df["display_name"].str.strip() == "", "display_name"] = df["name"].astype(str).apply(display_name)
+        df.loc[df["display_name"].str.strip() == "", "display_name"] = df["name"].astype(str).apply(player_display_name)
 
 
     # Desired column order (only include columns that actually exist)
@@ -143,7 +154,16 @@ def render_player_management_page():
     # --- Add single player ---
     st.markdown('### ➕ Add Single Player')
 
-    new_name = st.text_input('Name', key='new_name')
+    new_name = st.text_input(
+        'Player name',
+        key='new_name',
+        help='Used as the internal stats key. Keep it simple, for example "tom d".',
+    )
+    new_display_name = st.text_input(
+        'Displayed name',
+        key='new_display_name',
+        help='What everyone sees in the app. Leave blank to use a tidy version of the player name.',
+    )
     new_mmr = st.number_input('Starting MMR', value=STARTING_MMR, step=1, key='new_mmr')
     new_fitness = st.selectbox(
         'Fitness Level',
@@ -162,9 +182,7 @@ def render_player_management_page():
             try:
                 strengths_str = ""
                 name_key = canonical_name(new_name)
-                ui_name = new_name.strip()
-                if ui_name == "":
-                    ui_name = display_name(name_key)
+                ui_name = player_display_name(name_key, new_display_name)
 
                 cur.execute(
                     """
@@ -172,12 +190,18 @@ def render_player_management_page():
                         (league_id, name, display_name, mmr, strengths, fitness, is_active, archived_at)
                     VALUES (%s, %s, %s, %s, %s, %s, 1, NULL)
                     ON CONFLICT (league_id, name) DO NOTHING
+                    RETURNING id
                     """,
                     (league_id, name_key, ui_name, float(new_mmr), strengths_str, new_fitness)
                 )
+                inserted = cur.fetchone()
                 conn.commit()
+                if inserted:
+                    st.session_state["_player_mgmt_notice"] = ("success", f"Added {ui_name}.")
+                else:
+                    st.session_state["_player_mgmt_notice"] = ("warning", "That player already exists in this league.")
                 try:
-                    load_players_df.clear()
+                    invalidate_app_caches()
                 except Exception:
                     pass
             except Exception as e:
@@ -193,9 +217,9 @@ def render_player_management_page():
     # Build options from full players table (active + archived), so you can unarchive too
     all_players = load_players_df()
     if "display_name" not in all_players.columns:
-        all_players["display_name"] = all_players["name"].astype(str).apply(display_name)
+        all_players["display_name"] = all_players["name"].astype(str).apply(player_display_name)
     all_players["display_name"] = all_players["display_name"].fillna("").astype(str)
-    all_players.loc[all_players["display_name"].str.strip() == "", "display_name"] = all_players["name"].astype(str).apply(display_name)
+    all_players.loc[all_players["display_name"].str.strip() == "", "display_name"] = all_players["name"].astype(str).apply(player_display_name)
 
     if "is_active" not in all_players.columns:
         all_players["is_active"] = 1
@@ -244,7 +268,7 @@ def render_player_management_page():
             conn.commit()
             conn.close()
             try:
-                load_players_df.clear()
+                invalidate_app_caches()
             except Exception:
                 pass
 
@@ -263,7 +287,7 @@ def render_player_management_page():
                     name_key = canonical_name(row.get("name", ""))  # DB key (locked anyway)
                     ui_name = str(row.get("display_name", "")).strip()
                     if ui_name == "":
-                        ui_name = display_name(name_key)
+                        ui_name = player_display_name(name_key)
                     mmr = float(row.get('mmr') if row.get('mmr') not in (None, "") else STARTING_MMR) # type: ignore
                     strengths_str = str(row.get("strengths", "")).strip()
                     fitness = str(row.get("fitness", "")).strip()
@@ -286,7 +310,7 @@ def render_player_management_page():
                 conn.commit()
                 conn.close()
                 try:
-                    load_players_df.clear()
+                    invalidate_app_caches()
                 except Exception:
                     pass
                 st.success('✅ Player edits saved successfully.')

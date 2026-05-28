@@ -5,6 +5,7 @@ from utils.calc_utils import compute_streaks_from_matches
 from utils.export_utils import df_to_png
 from collections import defaultdict
 from utils.ui_components import page_header
+from utils.names import display_name_map_from_players_df, player_display_name
 
 
 
@@ -73,22 +74,17 @@ def render_dashboard_page():
 
     dfp = load_players_df()
 
-    # Case-insensitive map: any casing of name/display_name -> current display_name
+    name_map = display_name_map_from_players_df(dfp)
     alias_map = {}
-    for _, r in dfp.iterrows():
-        base = str(r.get("name") or "").strip()
-        dispn = str(r.get("display_name") or "").strip() or base
-
-        if base:
-            alias_map[base.lower()] = dispn
-        if dispn:
-            alias_map[dispn.lower()] = dispn
+    for base, dispn in name_map.items():
+        alias_map[base.lower()] = dispn
+        alias_map[dispn.lower()] = dispn
 
     def disp(n: str) -> str:
         s = str(n or "").strip()
         if not s:
             return s
-        return alias_map.get(s.lower(), s)
+        return alias_map.get(s.lower(), player_display_name(s))
 
     dfm = load_matches_df()
     dfm['processed'] = dfm['processed'].astype(int)
@@ -383,7 +379,10 @@ def render_dashboard_page():
     else:
         df_mmr["MMR"] = df_mmr["mmr"].astype(float).round(1)
 
-    df_mmr["Name"] = df_mmr["display_name"].fillna(df_mmr["name"])
+    df_mmr["Name"] = df_mmr.apply(
+        lambda r: player_display_name(str(r.get("name") or ""), r.get("display_name")),
+        axis=1,
+    )
     df_mmr = df_mmr[["Name", "MMR"]]
     df_view = pd.merge(df_view, df_mmr, on="Name", how="left")
 

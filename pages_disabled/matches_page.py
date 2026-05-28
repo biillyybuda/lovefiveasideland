@@ -6,6 +6,7 @@ from utils.db_utils import load_players_df, load_matches_df, get_conn, get_curre
 from utils.calc_utils import expected_score, process_unprocessed_matches, compute_streaks_from_matches, reset_and_reprocess_season
 from utils.export_utils import df_to_png, fig_to_png_bytes
 from utils.ui_components import page_header
+from utils.names import display_name_map_from_players_df, player_display_name
 
 def _parse_score_pair(score_text: str):
     parts = str(score_text or "").replace("-", " ").replace("–", " ").split()
@@ -58,15 +59,7 @@ def render_matches_page():
     players_df = load_players_df()
 
     # Build canonical -> display map lazily for the selected league.
-    name_map = dict(
-        zip(
-            players_df["name"],
-            players_df.get("display_name", players_df["name"])
-        )
-    )
-    for k, v in name_map.items():
-        if not v or str(v).strip() == "":
-            name_map[k] = k.replace("_", " ").title()
+    name_map = display_name_map_from_players_df(players_df)
 
     display_to_canonical = {v: k for k, v in name_map.items()}
     canonical_to_display = {k: v for k, v in name_map.items()}
@@ -89,7 +82,7 @@ def render_matches_page():
     def to_display_list(s):
         if not s:
             return s
-        return ", ".join(name_map.get(p.strip(), p.strip()) for p in s.split(","))
+        return ", ".join(name_map.get(p.strip(), player_display_name(p.strip())) for p in s.split(","))
 
     dfm_view["Team A"] = dfm_view["Team A"].apply(to_display_list)
     dfm_view["Team B"] = dfm_view["Team B"].apply(to_display_list)

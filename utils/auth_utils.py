@@ -19,6 +19,7 @@ from streamlit_cookies_controller import CookieController, RemoveEmptyElementCon
 
 
 COOKIE_KEY = "lovefive_sb_session"
+LEAGUE_COOKIE_KEY = "lovefive_selected_league"
 COOKIE_MAX_AGE = 30 * 24 * 60 * 60  # 30 days
 AUTH_REFRESH_GRACE_SECONDS = 50 * 60  # only refresh Supabase session about once per hour
 
@@ -58,6 +59,39 @@ def _cookie_set(controller: CookieController, key: str, value: str) -> None:
         controller.set(key, value)
     except Exception:
         controller.set(key, value)
+
+
+def _cookie_remove(controller: CookieController, key: str) -> None:
+    """Clear a cookie in both the browser and the component's server cache."""
+    for same_site in ("lax", "strict", None):
+        try:
+            controller.remove(key, path="/", same_site=same_site)
+        except Exception:
+            pass
+
+    try:
+        controller.set(key, "", max_age=0, path="/", same_site="lax")
+    except TypeError:
+        try:
+            controller.set(key, "")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _clear_auth_state() -> None:
+    for key in (
+        "sb_session",
+        "league_id",
+        "league_name",
+        "league_role",
+        "_lf_auth_checked",
+        "_lf_auth_last_refresh",
+        "_lf_cookie_probe_started",
+        "_lf_pending_logout",
+    ):
+        st.session_state.pop(key, None)
 
 
 
@@ -118,6 +152,9 @@ def _restore_session_from_cookie(force: bool = False) -> bool:
     """
     now = time.time()
 
+    if st.session_state.get("_lf_pending_logout"):
+        return False
+
     sess = st.session_state.get("sb_session")
     last_refresh = float(st.session_state.get("_lf_auth_last_refresh", 0) or 0)
 
@@ -162,10 +199,7 @@ def _restore_session_from_cookie(force: bool = False) -> bool:
 
     payload = _unpack(str(token))
     if not payload:
-        try:
-            controller.remove(COOKIE_KEY)
-        except Exception:
-            pass
+        _cookie_remove(controller, COOKIE_KEY)
         st.session_state["_lf_auth_checked"] = True
         return False
 
@@ -184,8 +218,10 @@ def _restore_session_from_cookie(force: bool = False) -> bool:
             "refresh_token": res.session.refresh_token,  # type: ignore
             "user_id": res.user.id,  # type: ignore
             "email": res.user.email,  # type: ignore
+            "app_metadata": getattr(res.user, "app_metadata", {}) or {},  # type: ignore
         }
         st.session_state["sb_session"] = sess
+        st.session_state.pop("_lf_pending_logout", None)
         st.session_state["_lf_auth_checked"] = True
         st.session_state["_lf_auth_last_refresh"] = now
         st.session_state.pop("_lf_cookie_probe_started", None)
@@ -199,10 +235,7 @@ def _restore_session_from_cookie(force: bool = False) -> bool:
         return True
 
     except Exception:
-        try:
-            controller.remove(COOKIE_KEY)
-        except Exception:
-            pass
+        _cookie_remove(controller, COOKIE_KEY)
         st.session_state.pop("sb_session", None)
         st.session_state.pop("_lf_cookie_probe_started", None)
         st.session_state["_lf_auth_checked"] = True
@@ -214,6 +247,8 @@ def _restore_session_from_cookie(force: bool = False) -> bool:
 # -----------------------------
 def is_authed() -> bool:
     # Hot path for normal page switching/clicking.
+    if st.session_state.get("_lf_pending_logout"):
+        return False
     if st.session_state.get("sb_session"):
         return True
     return _restore_session_from_cookie()
@@ -229,6 +264,89 @@ def sb_client_authed():
     if token:
         sb.postgrest.auth(token)
     return sb
+
+
+def save_selected_league(league_id: int, league_name: str, league_role: Optional[str]) -> None:
+    sess = st.session_state.get("sb_session") or {}
+    user_id = sess.get("user_id")
+    if not user_id:
+        return
+
+    controller = _get_cookie_controller()
+    _cookie_set(
+        controller,
+        LEAGUE_COOKIE_KEY,
+        _pack(
+            {
+                "user_id": user_id,
+                "league_id": int(league_id),
+                "league_name": league_name,
+                "league_role": league_role,
+            }
+        ),
+    )
+
+
+def forget_selected_league() -> None:
+    controller = _get_cookie_controller()
+    _cookie_remove(controller, LEAGUE_COOKIE_KEY)
+
+
+def is_superuser() -> bool:
+    sess = st.session_state.get("sb_session") or {}
+    metadata = sess.get("app_metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    role = str(metadata.get("role") or metadata.get("app_role") or "").lower()
+    roles = metadata.get("roles") or []
+    if isinstance(roles, str):
+        roles = [roles]
+    roles = [str(r).lower() for r in roles if r is not None]
+
+    return bool(
+        metadata.get("superuser")
+        or metadata.get("is_superuser")
+        or metadata.get("is_admin")
+        or role in ("superuser", "admin")
+        or "superuser" in roles
+    )
+
+
+def restore_selected_league(leagues: list[dict]) -> bool:
+    if st.session_state.get("league_id"):
+        return True
+
+    sess = st.session_state.get("sb_session") or {}
+    user_id = sess.get("user_id")
+    if not user_id:
+        return False
+
+    controller = _get_cookie_controller()
+    try:
+        controller.refresh()
+        token = controller.get(LEAGUE_COOKIE_KEY)
+    except Exception:
+        token = None
+
+    payload = _unpack(str(token)) if token else None
+    if not payload or payload.get("user_id") != user_id:
+        return False
+
+    league_id = payload.get("league_id")
+    if league_id is None:
+        _cookie_remove(controller, LEAGUE_COOKIE_KEY)
+        return False
+
+    selected = next((l for l in leagues if int(l.get("id")) == int(league_id)), None)
+    if not selected:
+        _cookie_remove(controller, LEAGUE_COOKIE_KEY)
+        return False
+
+    st.session_state.league_id = int(selected["id"])  # type: ignore
+    st.session_state.league_name = selected["name"]  # type: ignore
+    st.session_state.league_role = selected.get("role")  # type: ignore
+    return True
 
 
 def _legacy_login_ui():
@@ -305,9 +423,11 @@ def _legacy_login_ui():
             "refresh_token": res.session.refresh_token,  # type: ignore
             "user_id": res.user.id,  # type: ignore
             "email": res.user.email,  # type: ignore
+            "app_metadata": getattr(res.user, "app_metadata", {}) or {},  # type: ignore
         }
 
         st.session_state["sb_session"] = sess
+        st.session_state.pop("_lf_pending_logout", None)
 
         # Persist refresh_token only (access tokens expire)
         _cookie_set(
@@ -441,8 +561,10 @@ def login_ui():
             "refresh_token": res.session.refresh_token,  # type: ignore
             "user_id": res.user.id,  # type: ignore
             "email": res.user.email,  # type: ignore
+            "app_metadata": getattr(res.user, "app_metadata", {}) or {},  # type: ignore
         }
         st.session_state["sb_session"] = sess
+        st.session_state.pop("_lf_pending_logout", None)
         st.session_state["_lf_auth_checked"] = True
         st.session_state["_lf_auth_last_refresh"] = time.time()
         st.session_state.pop("_lf_cookie_probe_started", None)
@@ -463,18 +585,19 @@ def logout_ui():
     controller = _get_cookie_controller()
 
     if st.sidebar.button("Logout", use_container_width=True, key="logout_btn"):
-        st.session_state.pop("sb_session", None)
-        st.session_state.pop("league_id", None)
-        st.session_state.pop("league_name", None)
-        st.session_state.pop("league_role", None)
-        st.session_state.pop("_lf_auth_checked", None)
-        st.session_state.pop("_lf_auth_last_refresh", None)
-
-        # Clear cookie
+        sess = st.session_state.get("sb_session") or {}
         try:
-            controller.remove(COOKIE_KEY)
+            if sess.get("access_token") and sess.get("refresh_token"):
+                sb = get_supabase()
+                sb.auth.set_session(sess["access_token"], sess["refresh_token"])
+                sb.auth.sign_out()
         except Exception:
             pass
+
+        _cookie_remove(controller, COOKIE_KEY)
+        _cookie_remove(controller, LEAGUE_COOKIE_KEY)
+        _clear_auth_state()
+        st.session_state["_lf_pending_logout"] = True
 
         invalidate_app_caches()
         st.rerun()

@@ -123,7 +123,7 @@ def _display_name(nm: str) -> str:
     return ' '.join(out)
 
 
-def _df_with_display_names(df: pd.DataFrame) -> pd.DataFrame:
+def _df_with_display_names(df: pd.DataFrame, players_df: pd.DataFrame | None = None) -> pd.DataFrame:
     """Return a copy with common player-name columns converted to display names.
 
     Also removes internal helper columns like _A/_B used for filtering.
@@ -141,7 +141,10 @@ def _df_with_display_names(df: pd.DataFrame) -> pd.DataFrame:
         c = str(col).strip().lower()
         if c in ("player", "name", "player a", "player b", "player_a", "player_b", "a", "b"):
             try:
-                out_df[col] = out_df[col].astype(str).apply(_display_name)
+                if players_df is not None:
+                    out_df[col] = out_df[col].astype(str).apply(lambda n: _name_ui(n, players_df))
+                else:
+                    out_df[col] = out_df[col].astype(str).apply(_display_name)
             except Exception:
                 pass
     return out_df
@@ -813,12 +816,15 @@ def _expected_score_league_calibrated(a_mmr: float, b_mmr: float) -> float:
         return _clamp(expected_score_calibrated(a_mmr, b_mmr, scale=scale), 0.01, 0.99)
 
 
-def _style_team_columns(df: pd.DataFrame, team_a: list[str], team_b: list[str], teamA_fg: str, teamB_fg: str):
+def _style_team_columns(df: pd.DataFrame, team_a: list[str], team_b: list[str], teamA_fg: str, teamB_fg: str, players_df: pd.DataFrame | None = None):
     """Return a Styler that colours Player A/B cells based on which team they belong to."""
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return df
     team_a_set = {clean_name(x) for x in team_a}
     team_b_set = {clean_name(x) for x in team_b}
+    if players_df is not None:
+        team_a_set.update(clean_name(_name_ui(x, players_df)) for x in team_a)
+        team_b_set.update(clean_name(_name_ui(x, players_df)) for x in team_b)
 
     def _color(val: str):
         k = clean_name(val)
@@ -1469,8 +1475,8 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
         st.subheader("🔥 Key Matchups")
         km = insights.get("key_matchups")
         if km is not None:
-            km_d = _df_with_display_names(km)
-            km_s = _style_team_columns(km_d, team_a, team_b, teamA_fg, teamB_fg) # type: ignore
+            km_d = _df_with_display_names(km, players_df)
+            km_s = _style_team_columns(km_d, team_a, team_b, teamA_fg, teamB_fg, players_df) # type: ignore
             km_s = _format_1dp(km_s, km_d)
             st.dataframe(km_s, use_container_width=True)
         else:
@@ -1479,14 +1485,14 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
         st.subheader("🤝 Best Teammates")
         bt = insights.get("best_teammates", [])
         if isinstance(bt, (list, tuple)) and len(bt) == 2:
-            st.markdown(f"**Team A:** {', '.join([_display_name(p) for p in team_a])}")
-            btA_d = _df_with_display_names(bt[0])
-            btA_s = _style_team_columns(btA_d, team_a, [], teamA_fg, teamA_fg) # type: ignore
+            st.markdown(f"**Team A:** {', '.join([_name_ui(p, players_df) for p in team_a])}")
+            btA_d = _df_with_display_names(bt[0], players_df)
+            btA_s = _style_team_columns(btA_d, team_a, [], teamA_fg, teamA_fg, players_df) # type: ignore
             btA_s = _format_1dp(btA_s, btA_d)
             st.dataframe(btA_s, use_container_width=True)
-            st.markdown(f"**Team B:** {', '.join([_display_name(p) for p in team_b])}")
-            btB_d = _df_with_display_names(bt[1])
-            btB_s = _style_team_columns(btB_d, team_b, [], teamB_fg, teamB_fg) # type: ignore
+            st.markdown(f"**Team B:** {', '.join([_name_ui(p, players_df) for p in team_b])}")
+            btB_d = _df_with_display_names(bt[1], players_df)
+            btB_s = _style_team_columns(btB_d, team_b, [], teamB_fg, teamB_fg, players_df) # type: ignore
             btB_s = _format_1dp(btB_s, btB_d)
             st.dataframe(btB_s, use_container_width=True)
         else:
@@ -1496,9 +1502,9 @@ def _render_match_preview(team_a: list[str], team_b: list[str], teamA_label: str
         fs = insights.get("form_streaks")
 
         if fs is not None:
-            fs_d = _round_numeric(_df_with_display_names(fs), 1)
+            fs_d = _round_numeric(_df_with_display_names(fs, players_df), 1)
             st.dataframe(
-                _style_team_columns(fs_d, team_a, team_b, teamA_fg, teamB_fg), # type: ignore
+                _style_team_columns(fs_d, team_a, team_b, teamA_fg, teamB_fg, players_df), # type: ignore
                 use_container_width=True
             )
         else:
@@ -1956,13 +1962,13 @@ def render_team_generator_page(show_header: bool = True):
         "Select players for balance",
         names,
         key="tg_player_picker",
-        format_func=_display_name,
+        format_func=lambda n: _name_ui(n, players_df),
     )
     st.session_state.tg_selected_players = list(sel)
 
     if captain_mode and captainA and captainB:
         sel = [p for p in sel if p not in [captainA, captainB]]
-        st.info(f"Balancing {len(sel)} players (excluding captains {captainA} & {captainB}).")
+        st.info(f"Balancing {len(sel)} players (excluding captains {_name_ui(captainA, players_df)} & {_name_ui(captainB, players_df)}).")
 
     if (captain_mode and len(sel) != 8) or (not captain_mode and len(sel) != 10):
         st.warning("Please select correct number of players.")
@@ -1971,9 +1977,9 @@ def render_team_generator_page(show_header: bool = True):
     # Locked players
     c1, c2 = st.columns(2)
     with c1:
-        locks_A = st.multiselect("🔒 Lock → Team A", options=sel, format_func=_display_name)
+        locks_A = st.multiselect("🔒 Lock → Team A", options=sel, format_func=lambda n: _name_ui(n, players_df))
     with c2:
-        locks_B = st.multiselect("🔒 Lock → Team B", options=[p for p in sel if p not in locks_A], format_func=_display_name)
+        locks_B = st.multiselect("🔒 Lock → Team B", options=[p for p in sel if p not in locks_A], format_func=lambda n: _name_ui(n, players_df))
 
     if set(locks_A) & set(locks_B):
         st.error("A player cannot be locked to both teams.")

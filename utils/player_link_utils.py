@@ -8,7 +8,7 @@ def fetch_players_with_links(league_id: int):
         """
         select
             p.id,
-            p.display_name,
+            coalesce(nullif(p.display_name, ''), p.name) as display_name,
             p.user_id,
             pr.email,
             pr.display_name as profile_display_name
@@ -16,7 +16,7 @@ def fetch_players_with_links(league_id: int):
         left join public.profiles pr
             on pr.id = p.user_id
         where p.league_id = %s
-        order by p.display_name asc
+        order by coalesce(nullif(p.display_name, ''), p.name) asc
         """,
         (league_id,),
     )
@@ -114,11 +114,11 @@ def _fetch_unlinked_players(league_id: int):
     cur = conn.cursor()
     cur.execute(
         """
-        select id, display_name
+        select id, coalesce(nullif(display_name, ''), name) as display_name
         from public.players
         where league_id = %s
           and (user_id is null)
-        order by display_name asc
+        order by coalesce(nullif(display_name, ''), name) asc
         """,
         (league_id,),
     )

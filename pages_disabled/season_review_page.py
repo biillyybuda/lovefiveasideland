@@ -3,6 +3,7 @@ import pandas as pd
 import datetime
 from pathlib import Path
 from utils.ui_components import page_header
+from utils.names import player_display_name
 
 from utils.db_utils import get_conn, get_current_league_id, backup_db_manual, STARTING_MMR
 from utils.relationships_utils import calculate_chemistry_for_all_duos, calculate_rivalry_intensity
@@ -61,7 +62,7 @@ def _build_display_name_map(players_df: pd.DataFrame) -> dict[str, str]:
         if not base:
             continue
         disp = str(r.get(disp_col, "")).strip() if disp_col else ""
-        out[base.upper()] = disp or base
+        out[base.upper()] = player_display_name(base, disp)
     return out
 
 

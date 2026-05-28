@@ -1,7 +1,13 @@
 # utils/league_utils.py
 import streamlit as st
 from utils.cache_utils import invalidate_app_caches
-from utils.auth_utils import sb_client_authed
+from utils.auth_utils import (
+    forget_selected_league,
+    is_superuser,
+    restore_selected_league,
+    save_selected_league,
+    sb_client_authed,
+)
 from utils.db_utils import get_conn
 
 def update_my_display_name(new_display_name: str):
@@ -127,6 +133,7 @@ def load_my_leagues():
     league_ids = [r["league_id"] for r in mem_rows] # type: ignore
 
     if not league_ids:
+        st.session_state["_lf_my_leagues"] = []
         return []
 
     leagues = (
@@ -143,7 +150,30 @@ def load_my_leagues():
 
     # Stable ordering
     league_rows.sort(key=lambda x: (x.get("name") or "").lower()) # type: ignore
+    st.session_state["_lf_my_leagues"] = league_rows
     return league_rows
+
+
+def get_my_leagues_for_session():
+    leagues = st.session_state.get("_lf_my_leagues")
+    if isinstance(leagues, list):
+        return leagues
+    return load_my_leagues()
+
+
+def change_league_sidebar_ui() -> None:
+    leagues = get_my_leagues_for_session()
+    can_change = len(leagues) > 1 or is_superuser()
+    if not can_change:
+        return
+
+    if st.sidebar.button("Change League", use_container_width=True, key="change_league_btn"):
+        forget_selected_league()
+        for key in ("league_id", "league_name", "league_role"):
+            st.session_state.pop(key, None)
+        st.session_state["page"] = "Home"
+        invalidate_app_caches()
+        st.rerun()
 
 
 def _legacy_league_selector_ui():
@@ -175,6 +205,7 @@ def _legacy_league_selector_ui():
             st.session_state.league_id = result["league_id"]
             st.session_state.league_name = result["league_name"]
             st.session_state.league_role = result["role"]
+            save_selected_league(result["league_id"], result["league_name"], result["role"])
             st.rerun()
 
         st.info("Ask your league admin for a code or invite link.")
@@ -187,6 +218,7 @@ def _legacy_league_selector_ui():
         st.session_state.league_id = int(only["id"]) # type: ignore
         st.session_state.league_name = only["name"] # type: ignore
         st.session_state.league_role = only.get("role") # type: ignore
+        save_selected_league(int(only["id"]), only["name"], only.get("role")) # type: ignore
         return True
 
     labels = [f"{l['name']} ({l.get('role', 'member')})" for l in leagues] # type: ignore
@@ -199,6 +231,7 @@ def _legacy_league_selector_ui():
         st.session_state.league_id = int(selected["id"]) # type: ignore
         st.session_state.league_name = selected["name"] # type: ignore
         st.session_state.league_role = selected.get("role") # type: ignore
+        save_selected_league(int(selected["id"]), selected["name"], selected.get("role")) # type: ignore
         st.rerun()
 
     return bool(st.session_state.get("league_id"))
@@ -206,9 +239,13 @@ def _legacy_league_selector_ui():
 
 def _enter_league(selected: dict):
     invalidate_app_caches()
-    st.session_state.league_id = int(selected["id"]) # type: ignore
-    st.session_state.league_name = selected["name"] # type: ignore
-    st.session_state.league_role = selected.get("role") # type: ignore
+    league_id = int(selected["id"]) # type: ignore
+    league_name = selected["name"] # type: ignore
+    league_role = selected.get("role") # type: ignore
+    st.session_state.league_id = league_id
+    st.session_state.league_name = league_name
+    st.session_state.league_role = league_role
+    save_selected_league(league_id, league_name, league_role)
 
 
 def _join_code_form(key_prefix: str) -> bool:
@@ -236,6 +273,7 @@ def _join_code_form(key_prefix: str) -> bool:
     st.session_state.league_id = result["league_id"]
     st.session_state.league_name = result["league_name"]
     st.session_state.league_role = result["role"]
+    save_selected_league(result["league_id"], result["league_name"], result["role"])
     st.success(f"Joined {result['league_name']}.")
     st.rerun()
     return True
@@ -279,6 +317,9 @@ def league_selector_ui():
         _join_code_form("first_league")
         st.caption("Ask your league organiser for a code or invite link.")
         return False
+
+    if restore_selected_league(leagues):
+        return True
 
     if len(leagues) == 1 and not st.session_state.get("league_id"):
         _enter_league(leagues[0])

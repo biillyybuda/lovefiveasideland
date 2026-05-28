@@ -649,7 +649,15 @@ def render_charts_fast_summary(league_id: int):
     if recent.empty:
         st.info("No processed matches yet.")
     else:
-        st.dataframe(recent, use_container_width=True, hide_index=True)
+        name_map = get_name_map_cached(league_id)
+        recent_view = recent.copy()
+        recent_view["team_a"] = recent_view["team_a"].apply(
+            lambda s: ", ".join(to_display(p, name_map) for p in _split_team(s))
+        )
+        recent_view["team_b"] = recent_view["team_b"].apply(
+            lambda s: ", ".join(to_display(p, name_map) for p in _split_team(s))
+        )
+        st.dataframe(recent_view, use_container_width=True, hide_index=True)
 
     st.info("Choose a detailed view above when you want the heavier charts and tables.")
 
@@ -1236,6 +1244,80 @@ def render_player_insights(suffix="", season_mode=None, selected_year=None, seas
                 )
             else:
                 st.info("Not enough matches to calculate form.")
+
+        # --------------------------
+        # All Games Involving This Player
+        # --------------------------
+        st.subheader("All Games Involving This Player")
+
+        all_game_rows = []
+        for _, r in df_p.sort_values("date", ascending=False).iterrows():
+            mid = r.get("match_id")
+            m = matches[matches["id"] == mid]
+            if m.empty:
+                continue
+
+            mrow = m.iloc[0]
+            ta = _split_team(mrow.get("team_a", ""))
+            tb = _split_team(mrow.get("team_b", ""))
+            res = str(mrow.get("result", "")).strip().upper()
+            if res == "D":
+                res = "DRAW"
+
+            on_team_a = sel_player in ta
+            on_team_b = sel_player in tb
+            if not on_team_a and not on_team_b:
+                continue
+
+            if res == "DRAW":
+                outcome = "Draw"
+            elif (on_team_a and res == "A") or (on_team_b and res == "B"):
+                outcome = "Win"
+            else:
+                outcome = "Loss"
+
+            my_team = ta if on_team_a else tb
+            opp_team = tb if on_team_a else ta
+
+            all_game_rows.append(
+                {
+                    "Date": mrow.get("date", ""),
+                    "Outcome": outcome,
+                    "Score": str(mrow.get("score", "") or "").strip(),
+                    "Team": "Team A" if on_team_a else "Team B",
+                    "Teammates": ", ".join(to_display(p, name_map) for p in my_team if p != sel_player),
+                    "Opponents": ", ".join(to_display(p, name_map) for p in opp_team),
+                    "MMR Before": round(float(r.get("mmr_before", 0.0)), 1),
+                    "MMR After": round(float(r.get("mmr_after", 0.0)), 1),
+                    "MMR Delta": round(float(r.get("mmr_after", 0.0)) - float(r.get("mmr_before", 0.0)), 1),
+                }
+            )
+
+        if not all_game_rows:
+            st.info("No full match log found for this player.")
+        else:
+            outcome_filter = st.radio(
+                "Filter games",
+                options=["All", "Wins", "Draws", "Losses"],
+                index=0,
+                horizontal=True,
+                key=f"player_all_games_filter_{suffix}",
+            )
+
+            df_all_games = pd.DataFrame(all_game_rows)
+            if outcome_filter == "Wins":
+                df_all_games = df_all_games[df_all_games["Outcome"] == "Win"]
+            elif outcome_filter == "Draws":
+                df_all_games = df_all_games[df_all_games["Outcome"] == "Draw"]
+            elif outcome_filter == "Losses":
+                df_all_games = df_all_games[df_all_games["Outcome"] == "Loss"]
+
+            st.dataframe(
+                df_all_games,
+                use_container_width=True,
+                hide_index=True,
+                height=min(620, 72 + (len(df_all_games) * 35)),
+            )
 
         # -------------------------------------------------
         # 🤝 Best Teammates (Chemistry) — display names
