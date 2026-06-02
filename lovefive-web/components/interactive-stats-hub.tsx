@@ -15,6 +15,7 @@ export function InteractiveStatsHub({
   initialPlayer,
   initialSeason,
   initialView,
+  reportBasePath = "/demo/matches",
   players,
   matches,
   mmrHistory
@@ -22,6 +23,7 @@ export function InteractiveStatsHub({
   initialPlayer?: string;
   initialSeason?: string;
   initialView?: string;
+  reportBasePath?: string;
   players: Player[];
   matches: Match[];
   mmrHistory: MmrHistory[];
@@ -93,7 +95,7 @@ export function InteractiveStatsHub({
 
       {view === "matches" ? (
         <section id="match-history">
-          <InteractiveMatches matches={scopedMatches} players={players} />
+          <InteractiveMatches matches={scopedMatches} players={players} reportBasePath={reportBasePath} />
         </section>
       ) : null}
 

@@ -190,7 +190,7 @@ function buildPlayerLinks(player: PlayerSummary, matches: Match[], nameMap: Map<
       const residual = actualRate - expectedRate;
       return { ...row, actualRate, expectedRate, residual, score: rivalryScore({ ...row, actualRate, expectedRate, residual }) };
     })
-    .sort((a, b) => opponentThreatValue(b) - opponentThreatValue(a) || b.score - a.score || b.matches - a.matches);
+    .sort((a, b) => b.score - a.score || b.matches - a.matches || opponentThreatValue(b) - opponentThreatValue(a));
 
   return { teammates: teammateRows, rivals: rivalRows };
 }

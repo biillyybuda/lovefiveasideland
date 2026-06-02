@@ -4374,6 +4374,107 @@ tr:last-child td {
   padding: 0 12px;
 }
 
+.profile-action {
+  min-height: 36px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 7px;
+  color: #dce7ef;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  text-align: left;
+}
+
+.profile-action:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+[data-theme="light"] .profile-action {
+  color: #22313a;
+}
+
+.league-choice-grid,
+.admin-player-list,
+.player-chip-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.league-choice,
+.admin-player-list button,
+.player-chip-grid button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.035);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.league-choice:hover,
+.admin-player-list button:hover,
+.player-chip-grid button:hover,
+.player-chip-grid button.active {
+  border-color: rgba(145, 217, 79, 0.42);
+  background: rgba(145, 217, 79, 0.12);
+}
+
+.league-choice span,
+.admin-player-list span {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 850;
+}
+
+.team-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.player-chip-grid {
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+}
+
+.player-chip-grid button {
+  justify-content: center;
+  min-height: 38px;
+  font-weight: 850;
+}
+
+.admin-match-wrap {
+  display: grid;
+  gap: 10px;
+}
+
+.tool-card-link {
+  display: grid;
+  gap: 8px;
+}
+
+.tool-card-link span {
+  color: var(--green);
+  font-size: 0.78rem;
+  font-weight: 950;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.tool-card-link strong {
+  color: var(--text);
+  font-size: 1.25rem;
+}
+
 @media (max-width: 1100px) {
   .stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

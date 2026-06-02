@@ -225,8 +225,7 @@ st.sidebar.markdown("---")
 
 def _sidebar_nav_button(label: str, target: str, key: str):
     active = current_page == target
-    shown = f"> {label}" if active else label
-    if st.sidebar.button(shown, use_container_width=True, key=key, disabled=active):
+    if st.sidebar.button(label, use_container_width=True, key=key, disabled=active):
         _go_to_page(target)
         st.rerun()
 
@@ -264,7 +263,7 @@ with st.sidebar.expander("All pages", expanded=False):
 st.sidebar.markdown("---")
 
 # Manual cache refresh (useful after edits or if Render/Supabase feels stale)
-if st.sidebar.button("🔄 Refresh Data", use_container_width=True):
+if st.sidebar.button("Refresh Data", use_container_width=True):
     try:
         from utils.cache_utils import invalidate_app_caches
         invalidate_app_caches()
@@ -291,3 +290,4 @@ mod = importlib.import_module(module_path)
 with timed(f"Render {choice}", log_over=1.5):
     getattr(mod, func_name)()
 render_perf_sidebar()
+

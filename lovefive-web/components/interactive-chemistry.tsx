@@ -129,6 +129,7 @@ export function InteractiveChemistry({
 
       {mode === "head" ? (
         <HeadToHeadView
+          nameMap={nameMap}
           players={playerOptions}
           playerA={playerA}
           playerB={playerB}
@@ -173,6 +174,7 @@ function HeadToHeadView({
   players,
   playerA,
   playerB,
+  nameMap,
   selectedPair,
   setPlayerA,
   setPlayerB
@@ -180,6 +182,7 @@ function HeadToHeadView({
   players: string[];
   playerA: string;
   playerB: string;
+  nameMap: Map<string, string>;
   selectedPair: PairStats | null;
   setPlayerA: (value: string) => void;
   setPlayerB: (value: string) => void;
@@ -236,20 +239,20 @@ function HeadToHeadView({
           <section className="relationship-card-grid">
             <SharedMatchSummary
               match={latest || null}
-              playerA={selectedPair.a}
-              playerB={selectedPair.b}
+              nameMap={nameMap}
+              pair={selectedPair}
               title="Most recent involving both"
             />
             <SharedMatchSummary
               match={latestTogether || null}
-              playerA={selectedPair.a}
-              playerB={selectedPair.b}
+              nameMap={nameMap}
+              pair={selectedPair}
               title="Last game together"
             />
             <SharedMatchSummary
               match={latestFaced || null}
-              playerA={selectedPair.a}
-              playerB={selectedPair.b}
+              nameMap={nameMap}
+              pair={selectedPair}
               title="Last game against each other"
             />
           </section>
@@ -373,13 +376,13 @@ function TeamHistoryView({
 
 function SharedMatchSummary({
   match,
-  playerA,
-  playerB,
+  nameMap,
+  pair,
   title
 }: {
   match: Match | null;
-  playerA: string;
-  playerB: string;
+  nameMap: Map<string, string>;
+  pair: PairStats;
   title: string;
 }) {
   if (!match) {
@@ -395,10 +398,10 @@ function SharedMatchSummary({
     );
   }
 
-  const teamA = splitTeam(match.team_a);
-  const teamB = splitTeam(match.team_b);
+  const teamA = formatTeam(match.team_a, nameMap);
+  const teamB = formatTeam(match.team_b, nameMap);
   const score = scoreParts(match.score);
-  const players = [playerA, playerB];
+  const highlightKeys = [...pair.aKeys, ...pair.bKeys];
 
   return (
     <article className="relationship-match-card shared-summary-card">
@@ -413,29 +416,29 @@ function SharedMatchSummary({
         </div>
         <div>
           <span>Setup</span>
-          <strong>{playersTogether(players, match) ? "Together" : "Opposite"}</strong>
+          <strong>{playersTogetherByKeys(pair.aKeys, pair.bKeys, match) ? "Together" : "Opposite"}</strong>
         </div>
       </div>
       <div className="relationship-match-body">
-        <MiniTeamPanel label="Team A" players={players} team={teamA} tone="a" />
-        <MiniTeamPanel label="Team B" players={players} team={teamB} tone="b" />
+        <MiniTeamPanel highlightKeys={highlightKeys} label="Team A" team={teamA} tone="a" />
+        <MiniTeamPanel highlightKeys={highlightKeys} label="Team B" team={teamB} tone="b" />
       </div>
     </article>
   );
 }
 
 function MiniTeamPanel({
+  highlightKeys,
   label,
-  players,
   team,
   tone
 }: {
+  highlightKeys: string[];
   label: string;
-  players: string[];
   team: string[];
   tone: "a" | "b";
 }) {
-  const selectedSet = toNormSet(players);
+  const selectedSet = toNormSet(highlightKeys);
   return (
     <div className={`relationship-team-panel ${tone}`}>
       <h3>{label}</h3>
@@ -892,17 +895,20 @@ function sideFor(keys: string[], match: Match): "A" | "B" | null {
   return null;
 }
 
-function playersTogether(players: string[], match: Match) {
-  const teamA = splitTeam(match.team_a).map(normalizeName);
-  const teamB = splitTeam(match.team_b).map(normalizeName);
-  const keys = players.map(normalizeName);
-  return keys.every((key) => teamA.includes(key)) || keys.every((key) => teamB.includes(key));
-}
-
 function sharedMatchLabel(pair: PairStats, match: Match) {
-  return playersTogether([pair.a, pair.b], match)
+  return playersTogetherByKeys(pair.aKeys, pair.bKeys, match)
     ? `${pair.a} and ${pair.b} were teammates`
     : `${pair.a} and ${pair.b} faced each other`;
+}
+
+function playersTogetherByKeys(aKeys: string[], bKeys: string[], match: Match) {
+  const teamA = splitTeam(match.team_a).map(normalizeName);
+  const teamB = splitTeam(match.team_b).map(normalizeName);
+  const aInA = aKeys.some((key) => teamA.includes(normalizeName(key)));
+  const bInA = bKeys.some((key) => teamA.includes(normalizeName(key)));
+  const aInB = aKeys.some((key) => teamB.includes(normalizeName(key)));
+  const bInB = bKeys.some((key) => teamB.includes(normalizeName(key)));
+  return (aInA && bInA) || (aInB && bInB);
 }
 
 function toNormSet(values: string[]) {

@@ -5,12 +5,23 @@ STYLES = """
 :root{
   --bg:#0b0d10;
   --card:#0f1114;
+  --card-soft:rgba(255,255,255,0.035);
   --muted:#9aa2aa;
   --accent-blue:#2E86AB;
   --accent-red:#D64545;
+  --accent-green:#91d94f;
   --border: rgba(255,255,255,0.10);
   --widget: rgba(255,255,255,0.06);
   --text: #e6eef6;
+}
+
+/* Reduce Streamlit chrome so the app feels more like a product */
+#MainMenu,
+footer,
+[data-testid="stDeployButton"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"]{
+  visibility: hidden !important;
 }
 
 /* App + main containers */
@@ -30,12 +41,20 @@ section[data-testid="stSidebar"]{
 section[data-testid="stSidebar"] .stButton > button{
   justify-content: flex-start !important;
   min-height: 38px !important;
+  border-color: rgba(255,255,255,0.08) !important;
+  background: rgba(255,255,255,0.025) !important;
+  font-weight: 750 !important;
 }
 section[data-testid="stSidebar"] .stButton > button:disabled{
   opacity: 1 !important;
-  background: rgba(46,134,171,0.18) !important;
-  border-color: rgba(46,134,171,0.45) !important;
+  background: rgba(46,134,171,0.20) !important;
+  border-color: rgba(46,134,171,0.60) !important;
   color: #e6eef6 !important;
+  box-shadow: inset 3px 0 0 rgba(145,217,79,0.75) !important;
+}
+section[data-testid="stSidebar"] hr{
+  border-color: rgba(255,255,255,0.10) !important;
+  margin: 1.35rem 0 !important;
 }
 
 /* Generic “card” helpers */
@@ -89,6 +108,43 @@ div[role="option"]{
   background-color: rgba(255,255,255,0.08) !important;
 }
 
+/* Radio groups as segmented controls */
+div[role="radiogroup"]{
+  gap: 8px !important;
+  flex-wrap: wrap !important;
+}
+div[role="radiogroup"] label{
+  min-height: 38px !important;
+  padding: 8px 12px !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 999px !important;
+  background: rgba(255,255,255,0.025) !important;
+  transition: background 120ms ease, border-color 120ms ease !important;
+}
+div[role="radiogroup"] label:hover{
+  background: rgba(255,255,255,0.06) !important;
+  border-color: rgba(255,255,255,0.18) !important;
+}
+div[role="radiogroup"] label:has(input:checked){
+  background: rgba(46,134,171,0.20) !important;
+  border-color: rgba(46,134,171,0.62) !important;
+  box-shadow: 0 0 0 1px rgba(46,134,171,0.20) inset !important;
+}
+div[role="radiogroup"] label > div:first-child{
+  display: none !important;
+}
+
+/* Metric tiles */
+div[data-testid="stMetric"]{
+  padding: 12px 14px !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  border-radius: 12px !important;
+  background: rgba(255,255,255,0.025) !important;
+}
+div[data-testid="stMetricLabel"]{
+  color: var(--muted) !important;
+}
+
 /* Dataframes / tables */
 div[data-testid="stDataFrame"],
 div[data-testid="stTable"]{
@@ -96,6 +152,11 @@ div[data-testid="stTable"]{
   border: 1px solid var(--border) !important;
   border-radius: 12px !important;
   overflow: hidden !important;
+}
+
+/* Page density */
+[data-testid="stMainBlockContainer"]{
+  padding-top: 2rem !important;
 }
 
 /* Markdown links */

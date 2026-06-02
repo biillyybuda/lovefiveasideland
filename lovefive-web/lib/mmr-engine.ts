@@ -170,11 +170,20 @@ export function findMostImprovedPlayer(
   seasons: string[],
   selectedSeason = "all"
 ): ImprovementLeader | null {
+  return findMostImprovedPlayers(summaries, history, seasons, selectedSeason)[0] || null;
+}
+
+export function findMostImprovedPlayers(
+  summaries: PlayerSummary[],
+  history: MmrHistory[],
+  seasons: string[],
+  selectedSeason = "all"
+): ImprovementLeader[] {
   const orderedSeasons = [...new Set(seasons)]
     .filter(Boolean)
     .sort((a, b) => Number(a) - Number(b));
   const currentSeason = selectedSeason === "all" ? orderedSeasons[orderedSeasons.length - 1] : selectedSeason;
-  if (!currentSeason) return null;
+  if (!currentSeason) return [];
 
   const previousSeasons = orderedSeasons.filter((season) => Number(season) < Number(currentSeason));
   const candidates = summaries
@@ -207,7 +216,7 @@ export function findMostImprovedPlayer(
     return b.improvementScore - a.improvementScore
       || b.currentGain - a.currentGain
       || b.currentMatches - a.currentMatches;
-  })[0] || null;
+  });
 }
 
 function calculatePlayerUpdate(

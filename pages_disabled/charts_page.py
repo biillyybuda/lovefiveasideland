@@ -668,6 +668,15 @@ def render_charts_fast_summary(league_id: int):
         recent_view["team_b"] = recent_view["team_b"].apply(
             lambda s: ", ".join(to_display(p, name_map) for p in _split_team(s))
         )
+        recent_view = recent_view.rename(
+            columns={
+                "date": "Date",
+                "team_a": "Team A",
+                "team_b": "Team B",
+                "score": "Score",
+                "result": "Result",
+            }
+        )
         st.dataframe(recent_view, use_container_width=True, hide_index=True)
 
     st.info("Choose a detailed view above when you want the heavier charts and tables.")
@@ -1754,9 +1763,24 @@ def render_charts_page():
         divider=True,
     )
 
+    st.markdown(
+        """
+        <style>
+        .charts-view-note {
+            color: #9aa2aa;
+            font-size: 0.84rem;
+            margin-top: -0.35rem;
+            margin-bottom: 0.45rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     league_id = get_current_league_id()
+    st.markdown("<div class='charts-view-note'>Choose a view</div>", unsafe_allow_html=True)
     section = st.radio(
-        "View",
+        "Charts view",
         [
             "Summary",
             "Global Overview",
@@ -1767,9 +1791,10 @@ def render_charts_page():
         ],
         horizontal=True,
         key="charts_active_section",
+        label_visibility="collapsed",
     )
 
-    st.divider()
+    st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
 
     if section == "Summary":
         render_charts_fast_summary(league_id)

@@ -15,10 +15,12 @@ import {
 
 export function InteractiveMatches({
   matches,
-  players
+  players,
+  reportBasePath = "/demo/matches"
 }: {
   matches: Match[];
   players: Player[];
+  reportBasePath?: string;
 }) {
   const [query, setQuery] = useState("");
   const [season, setSeason] = useState("all");
@@ -98,7 +100,7 @@ export function InteractiveMatches({
             highlightPlayer={player === "all" ? undefined : nameMap.get(player) || player}
             match={match}
             nameMap={nameMap}
-            reportHref={`/demo/matches/${match.id}`}
+            reportHref={`${reportBasePath}/${match.id}`}
             key={match.id}
           />
         ))}

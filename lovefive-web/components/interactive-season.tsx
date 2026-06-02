@@ -16,10 +16,16 @@ import {
   type PlayerSummary
 } from "@/lib/demo-data";
 import { weightedFormScore } from "@/lib/form-engine";
-import { applyPeriodMmr } from "@/lib/mmr-engine";
+import { applyPeriodMmr, findMostImprovedPlayers } from "@/lib/mmr-engine";
 
 type Quarter = "full" | "q1" | "q2" | "q3" | "q4";
 type SeasonSortKey = "mmr" | "played" | "record" | "goalDiff" | "mmrChange" | "player";
+type ImprovementRow = {
+  key: string;
+  label: string;
+  value: number;
+  detail?: string;
+};
 
 const quarters: Array<{ value: Quarter; label: string; start: string; end: string }> = [
   { value: "full", label: "Full year", start: "01-01", end: "12-31" },
@@ -39,6 +45,7 @@ export function InteractiveSeason({
   mmrHistory: MmrHistory[];
 }) {
   const seasons = useMemo(() => seasonBreakdown(matches), [matches]);
+  const seasonYears = useMemo(() => seasons.map((item) => item.season), [seasons]);
   const seasonOptions = useMemo(() => ["all", ...seasons.map((item) => item.season)], [seasons]);
   const [season, setSeason] = useState(seasonOptions[0] || "all");
   const [quarter, setQuarter] = useState<Quarter>("full");
@@ -64,10 +71,30 @@ export function InteractiveSeason({
   const activeSummaries = periodSummaries.filter((player) => Number(player.matches_played || 0) > 0);
   const ratingLeaders = [...activeSummaries].sort((a, b) => Number(b.mmr || 0) - Number(a.mmr || 0)).slice(0, 8);
   const bestFormRun = useMemo(() => findBestFormRun(activeSummaries), [activeSummaries]);
-  const improved = [...activeSummaries]
+  const periodImproved: ImprovementRow[] = [...activeSummaries]
     .filter((player) => player.periodMmrChange !== null)
     .sort((a, b) => Number(b.periodMmrChange || 0) - Number(a.periodMmrChange || 0))
-    .slice(0, 8);
+    .slice(0, 8)
+    .map((player) => ({
+      key: String(player.id),
+      label: player.label,
+      value: Number(player.periodMmrChange || 0)
+    }));
+  const seasonImproved = useMemo<ImprovementRow[]>(() => {
+    const summaryScope = buildPlayerSummaries(players, matches);
+    return findMostImprovedPlayers(summaryScope, mmrHistory, seasonYears, season)
+      .slice(0, 8)
+      .map((row) => ({
+        key: String(row.player.id),
+        label: row.player.label,
+        value: row.improvementScore,
+        detail: `${signed(row.currentGain)} this season`
+      }));
+  }, [matches, mmrHistory, players, season, seasonYears]);
+  const improved = quarter === "full" ? seasonImproved : periodImproved;
+  const improvedSubtitle = quarter === "full"
+    ? "season gain compared with previous seasons"
+    : "MMR movement inside the period";
   const attendance = [...activeSummaries]
     .map((player) => ({ player, pct: Math.round((Number(player.matches_played || 0) / Math.max(periodMatches.length, 1)) * 100) }))
     .sort((a, b) => b.pct - a.pct || Number(b.player.matches_played || 0) - Number(a.player.matches_played || 0))
@@ -148,7 +175,7 @@ export function InteractiveSeason({
           main={bestFormRun?.player.label || "-"}
           detail={bestFormRun ? `${bestFormRun.form.join(" ")} from ${formatUkDate(bestFormRun.startDate)} to ${formatUkDate(bestFormRun.endDate)}` : ""}
         />
-        <AwardCard title="Most improved" main={topImproved?.label || "-"} detail={topImproved ? signed(Number(topImproved.periodMmrChange || 0)) + " MMR" : ""} />
+        <AwardCard title="Most improved" main={topImproved?.label || "-"} detail={topImproved ? `${signed(topImproved.value)} MMR` : ""} />
         <AwardCard title="Attendance" main={attendance[0]?.player.label || "-"} detail={attendance[0] ? `${attendance[0].pct}% of games` : ""} />
       </section>
 
@@ -185,14 +212,14 @@ export function InteractiveSeason({
         <div className="panel">
           <div className="section-subhead">
             <strong>Most improved</strong>
-            <span>MMR movement inside the period</span>
+            <span>{improvedSubtitle}</span>
           </div>
           <div className="rank-list compact-list">
             {improved.map((player, index) => (
-              <div className="rank-row" key={player.id}>
+              <div className="rank-row" key={player.key}>
                 <span>{index + 1}</span>
                 <strong>{player.label}</strong>
-                <em>{signed(Number(player.periodMmrChange || 0))}</em>
+                <em title={player.detail}>{signed(player.value)}</em>
               </div>
             ))}
           </div>
