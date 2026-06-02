@@ -14,3 +14,5 @@ services:
         sync: false
       - key: NEXT_PUBLIC_DEMO_JOIN_CODE
         value: DEMO2026
+      - key: NEXT_PUBLIC_CURRENT_APP_URL
+        value: https://app.lovefive.co.uk

@@ -1,6 +1,8 @@
 import Link from "next/link";
 
 export default function LoginPage() {
+  const currentAppUrl = process.env.NEXT_PUBLIC_CURRENT_APP_URL || "https://app.lovefive.co.uk";
+
   return (
     <main className="main">
       <div className="page-head">
@@ -20,7 +22,7 @@ export default function LoginPage() {
           <Link className="button primary" href="/demo">
             View demo league
           </Link>
-          <a className="button" href="https://lovefive.co.uk">
+          <a className="button" href={currentAppUrl}>
             Open current app
           </a>
         </div>
