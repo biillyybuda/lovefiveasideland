@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: lovefive-web
+    runtime: node
+    rootDir: lovefive-web
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    autoDeploy: true
+    envVars:
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+      - key: NEXT_PUBLIC_DEMO_JOIN_CODE
+        value: DEMO2026
