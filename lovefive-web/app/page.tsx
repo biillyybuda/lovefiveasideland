@@ -29,7 +29,7 @@ export default function HomePage() {
               Explore the demo league
             </Link>
             <Link className="button" href="/login">
-              Create an account
+              Sign in or create account
             </Link>
           </div>
           <div className="landing-trust-row">

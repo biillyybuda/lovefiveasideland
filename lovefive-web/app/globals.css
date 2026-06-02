@@ -4291,6 +4291,89 @@ tr:last-child td {
   line-height: 1.6;
 }
 
+.auth-layout {
+  display: grid;
+  min-height: calc(100vh - 72px);
+  place-items: center;
+  padding: clamp(12px, 4vw, 40px) 0;
+}
+
+.auth-panel {
+  display: grid;
+  gap: 18px;
+  width: min(100%, 620px);
+}
+
+.auth-panel h1 {
+  font-size: clamp(2.2rem, 4vw, 3.3rem);
+}
+
+.auth-form {
+  display: grid;
+  gap: 12px;
+}
+
+.auth-form label,
+.auth-inline-control label {
+  display: grid;
+  gap: 7px;
+}
+
+.auth-form span,
+.auth-inline-control span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.auth-form input,
+.auth-inline-control select {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+[data-theme="light"] .auth-form input,
+[data-theme="light"] .auth-inline-control select {
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.auth-message {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 111, 125, 0.28);
+  border-radius: 8px;
+  color: #ffd5db;
+  background: rgba(255, 111, 125, 0.09);
+  font-weight: 800;
+}
+
+[data-theme="light"] .auth-message {
+  color: #6d1e2a;
+}
+
+.auth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.auth-inline-control {
+  max-width: 360px;
+  margin-top: 12px;
+}
+
+.compact-button {
+  min-height: 38px;
+  padding: 0 12px;
+}
+
 @media (max-width: 1100px) {
   .stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
