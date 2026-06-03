@@ -11,7 +11,7 @@ export default function AppAddResultPage() {
           <div className="page-head">
             <div>
               <div className="eyebrow">Admin</div>
-              <h1>Add Result</h1>
+              <h1>Match Management</h1>
             </div>
           </div>
           <LiveAddResult leagueId={league.id} players={players} matches={matches} refresh={refresh} />

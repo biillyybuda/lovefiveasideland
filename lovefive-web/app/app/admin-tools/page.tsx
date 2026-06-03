@@ -16,8 +16,8 @@ export default function AppAdminToolsPage() {
           </div>
           <div className="tool-grid">
             <Link className="panel tool-card-link" href="/app/admin-tools/add-result">
-              <span>Add Result</span>
-              <strong>Save a match and update ratings.</strong>
+              <span>Match Management</span>
+              <strong>Add, correct and rebuild match results.</strong>
             </Link>
             <Link className="panel tool-card-link" href="/app/admin-tools/player-management">
               <span>Player Management</span>
