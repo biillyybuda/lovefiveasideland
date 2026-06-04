@@ -2211,6 +2211,15 @@ tr:last-child td {
   margin-bottom: 0;
 }
 
+.match-report-summary {
+  max-width: 860px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 1rem;
+  font-weight: 750;
+  line-height: 1.55;
+}
+
 .match-report-meta {
   display: flex;
   flex-wrap: wrap;
@@ -2262,9 +2271,11 @@ tr:last-child td {
 .weekly-report-facts span,
 .weekly-note-grid span,
 .weekly-change-grid span,
+.weekly-player-grid span,
 .report-lineups-panel .section-subhead span,
 .report-lineup-card span,
-.previous-meeting-panel span {
+.previous-meeting-panel .section-subhead span,
+.previous-meeting-topline span {
   color: var(--muted);
   font-size: 0.76rem;
   font-weight: 950;
@@ -2281,6 +2292,7 @@ tr:last-child td {
 .weekly-report-score small,
 .weekly-report-facts small,
 .weekly-change-grid small,
+.weekly-player-grid small,
 .previous-meeting-panel small {
   color: var(--muted);
   font-weight: 850;
@@ -2297,20 +2309,23 @@ tr:last-child td {
 
 .weekly-report-facts,
 .weekly-note-grid,
-.weekly-change-grid {
+.weekly-change-grid,
+.weekly-player-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
 .weekly-note-grid,
-.weekly-change-grid {
+.weekly-change-grid,
+.weekly-player-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .weekly-report-facts > div,
 .weekly-note-grid > div,
 .weekly-change-grid > div,
+.weekly-player-grid > div,
 .weekly-story-panel {
   display: grid;
   gap: 6px;
@@ -2323,6 +2338,7 @@ tr:last-child td {
 .weekly-report-facts strong,
 .weekly-note-grid strong,
 .weekly-change-grid strong,
+.weekly-player-grid strong,
 .previous-meeting-panel strong {
   color: var(--text);
   font-size: 1.02rem;
@@ -2332,6 +2348,21 @@ tr:last-child td {
 .weekly-change-panel {
   display: grid;
   gap: 12px;
+}
+
+.weekly-player-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.weekly-player-grid > div.a {
+  border-color: rgba(84, 168, 255, 0.22);
+  background: rgba(84, 168, 255, 0.042);
+}
+
+.weekly-player-grid > div.b {
+  border-color: rgba(255, 111, 125, 0.22);
+  background: rgba(255, 111, 125, 0.04);
 }
 
 .weekly-relationships-panel {
@@ -2377,16 +2408,30 @@ tr:last-child td {
   line-height: 1.45;
 }
 
-.previous-meeting-panel > div {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.previous-meeting-topline {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.previous-meeting-topline > div {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.026);
 }
 
 .previous-meeting-panel b {
   color: var(--text);
   font-size: 1.25rem;
   line-height: 1;
+}
+
+.previous-report-sides {
+  display: grid;
+  gap: 10px;
 }
 
 .weekly-story-list {
@@ -4795,6 +4840,8 @@ tr:last-child td {
   .weekly-report-facts,
   .weekly-note-grid,
   .weekly-change-grid,
+  .weekly-player-grid,
+  .previous-meeting-topline,
   .report-lineup-grid,
     .rank-row,
   .player-card,

@@ -343,7 +343,7 @@ export function duoChemistry(players: Player[], matches: Match[], mode: "team" |
       for (const a of teamA) {
         for (const b of teamB) {
           const row = touch(a, b);
-          const rowAIsTeamA = normalizeName(row.a) === normalizeName(a);
+          const rowAIsTeamA = row.aKey === normalizeName(a);
           const resForRowA = score[0] === score[1]
             ? "D"
             : (score[0] > score[1]) === rowAIsTeamA ? "W" : "L";

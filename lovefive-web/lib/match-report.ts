@@ -13,9 +13,29 @@ import {
 } from "./demo-data";
 import { expectedScore, scoreToResult, STARTING_MMR } from "./mmr-engine";
 
-type ReportFact = { label: string; value: string; detail: string };
-type ReportChange = { label: string; value: string; detail: string };
-type PreviousMeeting = { dateLabel: string; scoreLabel: string; resultLabel: string; sharedPlayers: number; detail: string };
+type ReportFact = { label: string; value: string; detail: string; people?: string[] };
+type ReportChange = { label: string; value: string; detail: string; people?: string[] };
+type ReportNote = { title: string; body: string; people: string[] };
+type ReportPlayerNote = { name: string; team: "Team A" | "Team B"; tone: "a" | "b"; detail: string };
+type PreviousMeetingSide = {
+  label: string;
+  tone: "a" | "b";
+  historicTeam: string[];
+  subs: string[];
+  missing: string[];
+  keptCount: number;
+  totalCount: number;
+};
+type PreviousMeeting = {
+  dateLabel: string;
+  scoreLabel: string;
+  resultLabel: string;
+  sharedPlayers: number;
+  sameSidePlayers: number;
+  swapped: boolean;
+  detail: string;
+  sides: [PreviousMeetingSide, PreviousMeetingSide];
+};
 
 type StoryCandidate = {
   key: string;
@@ -25,11 +45,13 @@ type StoryCandidate = {
   factValue?: string;
   factDetail?: string;
   headlines?: string[];
+  people?: string[];
 };
 
 export type MatchReport = {
   match: Match;
   headline: string;
+  summary: string;
   resultLabel: string;
   dateLabel: string;
   scoreLabel: string;
@@ -46,8 +68,9 @@ export type MatchReport = {
   facts: ReportFact[];
   storylines: string[];
   changes: ReportChange[];
+  playerNotes: ReportPlayerNote[];
   previousMeeting: PreviousMeeting | null;
-  notes: Array<{ title: string; body: string }>;
+  notes: ReportNote[];
 };
 
 export function buildMatchReport({
@@ -97,17 +120,31 @@ export function buildMatchReport({
     totalGoals
   });
   const headline = headlineFor({ match, result, winnerLabel, margin, totalGoals, upset, candidates });
-  const storylines = buildStorylines({ match, result, winnerLabel, loserLabel, margin, totalGoals, upset, candidates });
   const leadFact = leadFactFor(candidates, { result, winnerLabel, margin, totalGoals, upset });
   const changes = buildChangeItems(candidates, leadFact);
+  const storylines = buildStorylines({
+    match,
+    result,
+    winnerLabel,
+    loserLabel,
+    margin,
+    totalGoals,
+    upset,
+    favourite,
+    ratingGap,
+    candidates,
+    leadFact
+  });
+  const usedReportPeople = new Set([...peopleFromFact(leadFact), ...changes.flatMap((item) => item.people || [])]);
   const notes = [
-    pairNote(match, matches, nameMap, result),
-    rivalryNote(match, matches, nameMap, result)
-  ].filter((note): note is { title: string; body: string } => Boolean(note));
+    pairNote(match, matches, nameMap, result, usedReportPeople),
+    rivalryNote(match, matches, nameMap, result, usedReportPeople)
+  ].filter((note): note is ReportNote => Boolean(note));
 
   return {
     match,
     headline,
+    summary: summaryFor({ match, result, winnerLabel, loserLabel, margin, totalGoals, upset, favourite, ratingGap, leadFact, changes }),
     resultLabel: result === "DRAW" ? "Draw" : `${winnerLabel} win`,
     dateLabel: formatUkDate(match.date),
     scoreLabel: match.score || "-",
@@ -128,7 +165,8 @@ export function buildMatchReport({
     ],
     storylines,
     changes,
-    previousMeeting: previousMeetingFor(match, matches),
+    playerNotes: buildPlayerNotes({ match, matches, players, mmrHistory, nameMap, result, margin }),
+    previousMeeting: previousMeetingFor(match, matches, nameMap),
     notes
   };
 }
@@ -287,17 +325,19 @@ function addScoreCandidates(
   }
 
   if (result !== "DRAW" && margin === 1) {
+    const resultScore = resultScoreLabel(match, result);
     candidates.push({
       key: "one-goal-game",
-      priority: 88,
-      line: `${winnerLabel} only had a single goal of breathing room, so this one stayed alive right to the end.`,
+      priority: 106,
+      line: `${winnerLabel} only had a single goal of breathing room in a ${resultScore} finish, so this one stayed alive right to the end.`,
       factLabel: "Fine margins",
       factValue: "One-goal game",
-      factDetail: `${winnerLabel} edged ${loserLabel}`,
+      factDetail: match.score ? `${match.score} final score` : `${winnerLabel} edged ${loserLabel}`,
       headlines: [
-        `${winnerLabel} edge it by one`,
-        `${winnerLabel} hold on in a tight one`,
-        `${winnerLabel} take the narrow route`
+        `${winnerLabel} edge a tight contest`,
+        `${winnerLabel} win by the finest margin`,
+        `${winnerLabel} squeeze through by one`,
+        `${winnerLabel} settle it by a single goal`
       ]
     });
   } else if (result !== "DRAW" && margin >= 5) {
@@ -331,7 +371,7 @@ function addPlayerRunCandidates(
     .map((name) => ({ key: normalizeName(name), name: displayFromName(name, players), count: currentRun(name, "W", match, matches) }))
     .filter((row) => row.count >= 3)
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
-    .slice(0, 2);
+    .slice(0, 4);
 
   for (const row of winningRuns) {
     candidates.push({
@@ -341,6 +381,7 @@ function addPlayerRunCandidates(
       factLabel: "Streak watch",
       factValue: `${row.name} stays hot`,
       factDetail: `${row.count} wins in a row`,
+      people: [row.key],
       headlines: [
         `${row.name} keeps the run alive`,
         `${row.name} keeps the form run alive`,
@@ -359,7 +400,7 @@ function addPlayerRunCandidates(
     }))
     .filter((row) => row.count >= 4 && row.winningCount < 3)
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
-    .slice(0, 2);
+    .slice(0, 4);
 
   for (const row of unbeatenRuns) {
     candidates.push({
@@ -369,6 +410,7 @@ function addPlayerRunCandidates(
       factLabel: "Momentum watch",
       factValue: `${row.name} stays unbeaten`,
       factDetail: `${row.count} without defeat`,
+      people: [row.key],
       headlines: [
         `${row.name} keeps the unbeaten run intact`,
         `${row.name} avoids the loss again`,
@@ -381,7 +423,7 @@ function addPlayerRunCandidates(
     .map((name) => ({ key: normalizeName(name), name: displayFromName(name, players), count: previousRun(name, "L", match, matches) }))
     .filter((row) => row.count >= 2)
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
-    .slice(0, 2);
+    .slice(0, 4);
 
   for (const row of bounceBacks) {
     candidates.push({
@@ -391,6 +433,7 @@ function addPlayerRunCandidates(
       factLabel: "Bounce watch",
       factValue: `${row.name} gets the reset`,
       factDetail: `${row.count}-game losing run ended`,
+      people: [row.key],
       headlines: [
         `${row.name} gets the bounce at last`,
         `${row.name} turns the run around`,
@@ -404,7 +447,7 @@ function addPlayerRunCandidates(
     .map((name) => ({ key: normalizeName(name), name: displayFromName(name, players), count: previousRun(name, "W", match, matches) }))
     .filter((row) => row.count >= 3)
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
-    .slice(0, 2);
+    .slice(0, 4);
 
   for (const row of haltedRuns) {
     candidates.push({
@@ -414,6 +457,7 @@ function addPlayerRunCandidates(
       factLabel: "Run stopped",
       factValue: `${row.name} cooled off`,
       factDetail: `${row.count}-game winning run ended`,
+      people: [row.key],
       headlines: [
         `${row.name}'s run is finally stopped`,
         `${row.name} is brought back down`,
@@ -426,7 +470,7 @@ function addPlayerRunCandidates(
     .map((name) => ({ key: normalizeName(name), name: displayFromName(name, players), count: currentRun(name, "L", match, matches) }))
     .filter((row) => row.count >= 3)
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
-    .slice(0, 1);
+    .slice(0, 3);
 
   for (const row of losingRuns) {
     candidates.push({
@@ -436,6 +480,7 @@ function addPlayerRunCandidates(
       factLabel: "Pressure point",
       factValue: `${row.name} is under pressure`,
       factDetail: `${row.count} defeats in a row`,
+      people: [row.key],
       headlines: [
         `${row.name} is left waiting for the bounce`,
         `${row.name}'s rough run grows`,
@@ -446,22 +491,53 @@ function addPlayerRunCandidates(
 }
 
 function addRatingMovementCandidates(candidates: StoryCandidate[], match: Match, players: Player[], mmrHistory: MmrHistory[]) {
-  const changes = matchMmrChanges(match, players, mmrHistory).sort((a, b) => b.delta - a.delta);
-  const biggestGain = changes[0];
-  if (!biggestGain || biggestGain.delta < 8) return;
+  const changes = matchMmrChanges(match, players, mmrHistory);
+  const gains = changes
+    .filter((row) => row.delta >= 8)
+    .sort((a, b) => b.delta - a.delta || a.name.localeCompare(b.name))
+    .slice(0, 4);
 
-  candidates.push({
-    key: `rating-lift-${biggestGain.key}`,
-    priority: 76 + Math.min(biggestGain.delta, 16),
-    line: `${biggestGain.name} takes the biggest rating lift from this match at ${signed(biggestGain.delta)} MMR.`,
-    factLabel: "Rating lift",
-    factValue: `${biggestGain.name} ${signed(biggestGain.delta)}`,
-    factDetail: "Best rating move from the game",
-    headlines: [
-      `${biggestGain.name} gets the rating lift`,
-      `${biggestGain.name} leaves with the biggest boost`,
-      `${biggestGain.name} cashes in on the result`
-    ]
+  gains.forEach((gain, index) => {
+    candidates.push({
+      key: `rating-lift-${gain.key}`,
+      priority: 76 + Math.min(gain.delta, 16) - index * 3,
+      line:
+        index === 0
+          ? `${gain.name} takes the biggest rating lift from this match at ${signed(gain.delta)} MMR.`
+          : `${gain.name} also leaves with a ${signed(gain.delta)} MMR lift from the result.`,
+      factLabel: "Rating lift",
+      factValue: `${gain.name} ${signed(gain.delta)}`,
+      factDetail: index === 0 ? "Best rating move from the game" : "Rating move from the game",
+      people: [gain.key],
+      headlines:
+        index === 0
+          ? [
+              `${gain.name} gets the rating lift`,
+              `${gain.name} leaves with the biggest boost`,
+              `${gain.name} cashes in on the result`
+            ]
+          : undefined
+    });
+  });
+
+  const drops = changes
+    .filter((row) => row.delta <= -8)
+    .sort((a, b) => a.delta - b.delta || a.name.localeCompare(b.name))
+    .slice(0, 3);
+
+  drops.forEach((drop, index) => {
+    candidates.push({
+      key: `rating-hit-${drop.key}`,
+      priority: 72 + Math.min(Math.abs(drop.delta), 16) - index * 3,
+      line:
+        index === 0
+          ? `${drop.name} took the biggest rating hit from this match at ${signed(drop.delta)} MMR.`
+          : `${drop.name} was also pulled down by ${signed(drop.delta)} MMR after the defeat.`,
+      factLabel: "Rating hit",
+      factValue: `${drop.name} ${signed(drop.delta)}`,
+      factDetail: index === 0 ? "Biggest rating drop from the game" : "Rating move from the game",
+      people: [drop.key]
+    });
   });
 }
 
@@ -490,6 +566,7 @@ function addPartnershipCandidates(
       factLabel: "Partnership watch",
       factValue: `${best.a} + ${best.b}`,
       factDetail: `${rate}% points rate together`,
+      people: [normalizeName(best.a), normalizeName(best.b)],
       headlines: [
         `${best.a} and ${best.b} keep clicking`,
         `${best.a} + ${best.b} keep the link strong`,
@@ -522,6 +599,7 @@ function addRivalryCandidates(
       factLabel: "Rivalry watch",
       factValue: `${best.a} vs ${best.b}`,
       factDetail: `${best.matches} meetings now`,
+      people: [normalizeName(best.a), normalizeName(best.b)],
       headlines: [
         `${best.a} and ${best.b} leave it unresolved`,
         `${best.a} vs ${best.b} stays live`,
@@ -542,6 +620,7 @@ function addRivalryCandidates(
     factLabel: "Rivalry watch",
     factValue: `${winner} over ${loser}`,
     factDetail: `${best.matches} meetings tracked`,
+    people: [normalizeName(winner), normalizeName(loser)],
     headlines: [
       `${winner} takes the latest rivalry round`,
       `${winner} nudges the rivalry again`,
@@ -568,7 +647,14 @@ function headlineFor({
   upset: boolean;
   candidates: StoryCandidate[];
 }) {
-  const headlineCandidate = candidates.find((candidate) => candidate.headlines?.length);
+  const preferredHeadlineKeys =
+    result === "DRAW"
+      ? ["draw-balance"]
+      : ["rating-upset", "archive-high-goals", "one-goal-game", "clear-margin", "high-goals", "rating-edge-held"];
+  const headlineCandidate =
+    preferredHeadlineKeys
+      .map((key) => candidates.find((candidate) => candidate.key === key && candidate.headlines?.length))
+      .find(Boolean) || candidates.find((candidate) => candidate.headlines?.length);
   if (headlineCandidate?.headlines?.length) {
     return stablePick(headlineCandidate.headlines, `${match.id}-${headlineCandidate.key}`);
   }
@@ -593,7 +679,7 @@ function headlineFor({
   ], match.id);
 }
 
-function buildStorylines({
+function summaryFor({
   match,
   result,
   winnerLabel,
@@ -601,7 +687,10 @@ function buildStorylines({
   margin,
   totalGoals,
   upset,
-  candidates
+  favourite,
+  ratingGap,
+  leadFact,
+  changes
 }: {
   match: Match;
   result: "A" | "B" | "DRAW";
@@ -610,7 +699,96 @@ function buildStorylines({
   margin: number;
   totalGoals: number;
   upset: boolean;
+  favourite: "Team A" | "Team B" | "Level";
+  ratingGap: number;
+  leadFact: ReportFact;
+  changes: ReportChange[];
+}) {
+  const score = resultScoreLabel(match, result);
+  const secondary = changes.find((item) => item.label !== leadFact.label || item.value !== leadFact.value);
+  const secondarySentence = summaryFollowUpFor(secondary);
+
+  if (result === "DRAW") {
+    const ratingLine =
+      favourite === "Level"
+        ? "the ratings were already calling it tight"
+        : `${favourite} had the pre-match edge`;
+    return `It finished ${score}, and ${ratingLine}. No clean swing, just another result that keeps the matchup open.`;
+  }
+
+  if (upset) {
+    return `${winnerLabel} took a ${score} win from the lower-rated side of the draw. The scoreline matters, but the bigger story is that ${loserLabel}'s pre-match edge did not hold.${secondarySentence}`;
+  }
+
+  if (margin === 1) {
+    const ratingLine =
+      favourite === "Level"
+        ? `with only ${ratingGap} MMR between the teams before kick-off`
+        : `with ${favourite} carrying the pre-match rating edge`;
+    return `${winnerLabel} edged a ${score} win ${ratingLine}.${secondarySentence}`;
+  }
+
+  if (margin >= 5) {
+    return `${winnerLabel} won ${score} and gave the result real separation. ${loserLabel} were kept at distance once the gap opened.${secondarySentence}`;
+  }
+
+  if (totalGoals >= 16) {
+    return `${winnerLabel} came through a busy ${score} game with ${totalGoals} goals on the board. It reads like a night where the attack won out just enough.${secondarySentence}`;
+  }
+
+  return `${winnerLabel} banked a ${score} win and kept ${loserLabel} just far enough away. The rating movement now gives the result its aftertaste.${secondarySentence}`;
+}
+
+function summaryFollowUpFor(change: ReportChange | undefined) {
+  if (!change) return "";
+
+  if (change.label === "Streak watch") {
+    const name = change.value.replace(/\s+stays hot$/i, "");
+    const wins = change.detail.match(/^(\d+)\s+wins/i)?.[1];
+    return wins ? ` ${name}'s winning run now stretches to ${wins}.` : ` ${change.value}.`;
+  }
+
+  if (change.label === "Momentum watch") {
+    const name = change.value.replace(/\s+stays unbeaten$/i, "");
+    const run = change.detail.match(/^(\d+)\s+without defeat/i)?.[1];
+    return run ? ` ${name} is up to ${run} without defeat.` : ` ${change.value}.`;
+  }
+
+  if (change.label === "Rating lift") {
+    return ` ${change.value} was the biggest ratings winner from the night.`;
+  }
+
+  if (change.label === "Rating hit") {
+    return ` ${change.value} took the biggest ratings hit.`;
+  }
+
+  return ` ${change.value}.`;
+}
+
+function buildStorylines({
+  match,
+  result,
+  winnerLabel,
+  loserLabel,
+  margin,
+  totalGoals,
+  upset,
+  favourite,
+  ratingGap,
+  candidates,
+  leadFact
+}: {
+  match: Match;
+  result: "A" | "B" | "DRAW";
+  winnerLabel: string;
+  loserLabel: string;
+  margin: number;
+  totalGoals: number;
+  upset: boolean;
+  favourite: "Team A" | "Team B" | "Level";
+  ratingGap: number;
   candidates: StoryCandidate[];
+  leadFact: ReportFact;
 }) {
   const lines: string[] = [];
   const scoreHeat = candidates.find((candidate) => candidate.key === "archive-high-goals" || candidate.key === "high-goals");
@@ -622,7 +800,7 @@ function buildStorylines({
   const bounce = candidates.find((candidate) => candidate.factLabel === "Bounce watch");
   const stoppedRun = candidates.find((candidate) => candidate.factLabel === "Run stopped");
   const pressure = candidates.find((candidate) => candidate.factLabel === "Pressure point");
-  const ratingLift = candidates.find((candidate) => candidate.factLabel === "Rating lift");
+  const extraAngle = selectStorylineAngle(candidates, leadFact);
 
   if (result === "DRAW") {
     lines.push(`It finished ${match.score || "level"}, which kept this matchup unresolved rather than handing either side a clean swing.`);
@@ -631,7 +809,7 @@ function buildStorylines({
   } else if (clearMargin) {
     lines.push(`${winnerLabel} turned a close-looking matchup into a clear ${margin}-goal win.`);
   } else if (closeGame) {
-    lines.push(`${winnerLabel} edged it by one, so this reads as a held nerve result rather than a comfortable one.`);
+    lines.push(`${winnerLabel} had to live on fine margins, with a single goal deciding the result.`);
   } else if (ratingEdge) {
     lines.push(`${winnerLabel} had the rating edge and turned it into a ${margin}-goal win.`);
   } else {
@@ -640,22 +818,26 @@ function buildStorylines({
 
   if (scoreHeat) {
     lines.push(`${totalGoals} goals made it one of the livelier games in the archive.`);
+  } else if (closeGame && favourite === "Level") {
+    lines.push(`With only ${ratingGap} MMR between the teams before kick-off, this always looked close on paper; the scoreline backed that up.`);
+  } else if (closeGame) {
+    lines.push(`${loserLabel} were close enough to keep asking the question, but never close enough to stop the result landing.`);
   } else if (totalGoals && margin > 0 && !clearMargin && !closeGame) {
     lines.push(`The score finished ${match.score || "recorded"}, with ${margin} goals between the teams.`);
   } else if (result === "DRAW") {
     lines.push(scoreHeat ? `${totalGoals} goals still could not split them.` : "The draw matters most because neither side got a clean break in the matchup.");
   }
 
-  if (streak && pressure) {
+  if (streak && pressure && !overlapsFact(streak, leadFact) && !overlapsFact(pressure, leadFact)) {
     lines.push(`The form table split two ways: ${streak.factValue}, while ${pressure.factValue}.`);
-  } else if (streak && bounce) {
+  } else if (streak && bounce && !overlapsFact(streak, leadFact) && !overlapsFact(bounce, leadFact)) {
     lines.push(`The form angle is the interesting bit: ${streak.factValue}, and ${bounce.factValue}.`);
-  } else if (streak && stoppedRun) {
+  } else if (streak && stoppedRun && !overlapsFact(streak, leadFact) && !overlapsFact(stoppedRun, leadFact)) {
     lines.push(`${streak.factValue}, while ${stoppedRun.factValue}.`);
-  } else if (bounce && pressure) {
+  } else if (bounce && pressure && !overlapsFact(bounce, leadFact) && !overlapsFact(pressure, leadFact)) {
     lines.push(`${bounce.factValue}, while ${pressure.factValue}.`);
-  } else if (ratingLift) {
-    lines.push(`${ratingLift.factValue} was the biggest individual rating move from the game.`);
+  } else if (extraAngle) {
+    lines.push(extraAngle.line);
   }
 
   return uniqueStrings(lines).slice(0, 3);
@@ -669,42 +851,181 @@ function buildChangeItems(candidates: StoryCandidate[], leadFact: ReportFact): R
     "Run stopped",
     "Pressure point",
     "Rating lift",
+    "Rating hit",
     "Rating swing"
   ]);
-  const changes = candidates
+  const eligible = candidates
     .filter((candidate) => candidate.factLabel && candidate.factValue && candidate.factDetail)
     .filter((candidate) => consequenceLabels.has(candidate.factLabel || ""))
-    .filter((candidate) => candidate.factLabel !== leadFact.label || candidate.factValue !== leadFact.value)
-    .map((candidate) => ({
-      label: candidate.factLabel || "Change",
-      value: candidate.factValue || "Updated",
-      detail: candidate.factDetail || candidate.line
-    }));
+    .filter((candidate) => candidate.factLabel !== leadFact.label || candidate.factValue !== leadFact.value);
+
+  const changes = selectDiverseCandidates(eligible, 4, peopleFromFact(leadFact)).map((candidate) => ({
+    label: candidate.factLabel || "Change",
+    value: candidate.factValue || "Updated",
+    detail: candidate.factDetail || candidate.line,
+    people: candidate.people || []
+  }));
 
   return dedupeChanges(changes).slice(0, 4);
 }
 
-function previousMeetingFor(match: Match, matches: Match[]): PreviousMeeting | null {
-  const currentPlayers = new Set([...splitTeam(match.team_a), ...splitTeam(match.team_b)].map(normalizeName));
+function selectStorylineAngle(candidates: StoryCandidate[], leadFact: ReportFact) {
+  const storylineLabels = new Set([
+    "Streak watch",
+    "Momentum watch",
+    "Bounce watch",
+    "Run stopped",
+    "Pressure point",
+    "Rating lift",
+    "Rating hit"
+  ]);
+  const eligible = candidates
+    .filter((candidate) => candidate.factLabel && storylineLabels.has(candidate.factLabel))
+    .filter((candidate) => candidate.factLabel !== leadFact.label || candidate.factValue !== leadFact.value);
+
+  return selectDiverseCandidates(eligible, 1, peopleFromFact(leadFact))[0] || null;
+}
+
+function selectDiverseCandidates(candidates: StoryCandidate[], limit: number, initialPeople: string[] = []) {
+  const selected: StoryCandidate[] = [];
+  const remaining = [...candidates];
+  const usedPeople = new Set(initialPeople);
+  const usedLabels = new Set<string>();
+
+  while (selected.length < limit && remaining.length) {
+    let bestIndex = 0;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    for (let index = 0; index < remaining.length; index += 1) {
+      const score = diversityScore(remaining[index], usedPeople, usedLabels);
+      if (score > bestScore) {
+        bestIndex = index;
+        bestScore = score;
+      }
+    }
+
+    const [best] = remaining.splice(bestIndex, 1);
+    selected.push(best);
+    for (const person of best.people || []) {
+      usedPeople.add(person);
+    }
+    if (best.factLabel) usedLabels.add(best.factLabel);
+  }
+
+  return selected;
+}
+
+function diversityScore(candidate: StoryCandidate, usedPeople: Set<string>, usedLabels: Set<string>) {
+  const people = candidate.people || [];
+  const overlaps = people.filter((person) => usedPeople.has(person)).length;
+  const freshPeople = people.filter((person) => !usedPeople.has(person)).length;
+  const labelPenalty = candidate.factLabel && usedLabels.has(candidate.factLabel) ? 10 : 0;
+  return candidate.priority + freshPeople * 6 - overlaps * 36 - labelPenalty;
+}
+
+function peopleFromFact(fact: Pick<ReportFact, "people">) {
+  return fact.people || [];
+}
+
+function overlapsFact(candidate: StoryCandidate, fact: ReportFact) {
+  const factPeople = new Set(peopleFromFact(fact));
+  return Boolean(candidate.people?.some((person) => factPeople.has(person)));
+}
+
+function previousMeetingFor(match: Match, matches: Match[], nameMap: Map<string, string>): PreviousMeeting | null {
+  const currentTeamA = splitTeam(match.team_a);
+  const currentTeamB = splitTeam(match.team_b);
+  const currentA = new Set(currentTeamA.map(normalizeName));
+  const currentB = new Set(currentTeamB.map(normalizeName));
+  const currentPlayers = new Set([...currentA, ...currentB]);
   const closest = matchesBefore(match, matches)
     .map((row) => {
-      const previousPlayers = [...splitTeam(row.team_a), ...splitTeam(row.team_b)].map(normalizeName);
+      const previousA = splitTeam(row.team_a);
+      const previousB = splitTeam(row.team_b);
+      const previousASet = new Set(previousA.map(normalizeName));
+      const previousBSet = new Set(previousB.map(normalizeName));
+      const directSameSide = countOverlap(currentA, previousASet) + countOverlap(currentB, previousBSet);
+      const swappedSameSide = countOverlap(currentA, previousBSet) + countOverlap(currentB, previousASet);
+      const swapped = swappedSameSide > directSameSide;
+      const sameSidePlayers = Math.max(directSameSide, swappedSameSide);
+      const previousPlayers = [...previousA, ...previousB].map(normalizeName);
       const sharedPlayers = previousPlayers.filter((name) => currentPlayers.has(name)).length;
-      return { match: row, sharedPlayers };
+      return {
+        match: row,
+        sharedPlayers,
+        sameSidePlayers,
+        swapped,
+        orientedA: swapped ? previousB : previousA,
+        orientedB: swapped ? previousA : previousB
+      };
     })
     .filter((row) => row.sharedPlayers >= 4 && scoreParts(row.match.score))
-    .sort((a, b) => b.sharedPlayers - a.sharedPlayers || compareMatchesAsc(b.match, a.match))[0];
+    .sort((a, b) => b.sameSidePlayers - a.sameSidePlayers || b.sharedPlayers - a.sharedPlayers || compareMatchesAsc(b.match, a.match))[0];
 
   if (!closest) return null;
 
+  const currentResult = scoreToResult(match);
   const previousResult = scoreToResult(closest.match);
-  const previousWinner = previousResult === "DRAW" ? "it was a draw" : previousResult === "A" ? "Team A won" : "Team B won";
+  const previousWinner = previousResult === "DRAW" ? "a draw" : previousResult === "A" ? "a Team A win" : "a Team B win";
+  const continuity = `${closest.sharedPlayers} ${closest.sharedPlayers === 1 ? "player was" : "players were"} back, ${closest.sameSidePlayers} on the same side`;
+  const direction =
+    currentResult !== "DRAW" && previousResult !== "DRAW" && currentResult !== previousResult
+      ? "this was a reversal of the last similar meeting"
+      : currentResult === previousResult && currentResult !== "DRAW"
+        ? "the same side came out on top again"
+        : "the comparison stays live";
   return {
     dateLabel: formatUkDate(closest.match.date),
     scoreLabel: closest.match.score || "-",
     resultLabel: previousResult === "DRAW" ? "Draw" : previousResult === "A" ? "Team A won" : "Team B won",
     sharedPlayers: closest.sharedPlayers,
-    detail: `Last similar meeting was ${closest.match.score || "-"} on ${formatUkDate(closest.match.date)}; ${previousWinner}, with ${closest.sharedPlayers} players back from that game.`
+    sameSidePlayers: closest.sameSidePlayers,
+    swapped: closest.swapped,
+    detail: `Closest recent comparator: ${closest.match.score || "-"} on ${formatUkDate(closest.match.date)}, ${previousWinner}. With ${continuity}, ${direction}.`,
+    sides: [
+      previousMeetingSide({
+        historicTeam: closest.orientedA,
+        currentTeam: currentTeamA,
+        label: closest.swapped ? "Old Team B -> Team A" : "Old Team A -> Team A",
+        tone: "a",
+        nameMap
+      }),
+      previousMeetingSide({
+        historicTeam: closest.orientedB,
+        currentTeam: currentTeamB,
+        label: closest.swapped ? "Old Team A -> Team B" : "Old Team B -> Team B",
+        tone: "b",
+        nameMap
+      })
+    ]
+  };
+}
+
+function previousMeetingSide({
+  historicTeam,
+  currentTeam,
+  label,
+  tone,
+  nameMap
+}: {
+  historicTeam: string[];
+  currentTeam: string[];
+  label: string;
+  tone: "a" | "b";
+  nameMap: Map<string, string>;
+}): PreviousMeetingSide {
+  const currentSet = new Set(currentTeam.map(normalizeName));
+  const historicSet = new Set(historicTeam.map(normalizeName));
+  const missing = historicTeam.filter((name) => !currentSet.has(normalizeName(name)));
+  const subs = currentTeam.filter((name) => !historicSet.has(normalizeName(name)));
+
+  return {
+    label,
+    tone,
+    historicTeam: historicTeam.map((name) => displayFromMap(name, nameMap)),
+    subs: subs.map((name) => displayFromMap(name, nameMap)),
+    missing: missing.map((name) => displayFromMap(name, nameMap)),
+    keptCount: historicTeam.length - missing.length,
+    totalCount: historicTeam.length
   };
 }
 
@@ -723,7 +1044,8 @@ function leadFactFor(
     return {
       label: candidate.factLabel,
       value: candidate.factValue,
-      detail: candidate.factDetail
+      detail: candidate.factDetail,
+      people: candidate.people || []
     };
   }
 
@@ -797,8 +1119,26 @@ function scoreProfileFact(match: Match, matches: Match[], margin: number, totalG
   }
 
   if (leadLabel === "Fine margins" || leadLabel === "Separation") {
+    if (totalGoals && averagePreviousTotal) {
+      const averageLabel = `${totalGoals} goals vs ${averagePreviousTotal.toFixed(1)} avg`;
+      if (totalGoals <= averagePreviousTotal - 2) {
+        return {
+          label: "Score profile",
+          value: "Tighter than usual",
+          detail: averageLabel
+        };
+      }
+      if (totalGoals >= averagePreviousTotal + 2) {
+        return {
+          label: "Score profile",
+          value: "Busier than usual",
+          detail: averageLabel
+        };
+      }
+    }
+
     return {
-      label: "Goal volume",
+      label: "Score profile",
       value: totalGoals ? `${totalGoals} goals` : "Recorded",
       detail: averagePreviousTotal ? `${averagePreviousTotal.toFixed(1)} archive average` : "No archive average yet"
     };
@@ -843,30 +1183,123 @@ function scoreProfileFact(match: Match, matches: Match[], margin: number, totalG
   };
 }
 
-function pairNote(match: Match, matches: Match[], nameMap: Map<string, string>, result: "A" | "B" | "DRAW") {
+function buildPlayerNotes({
+  match,
+  matches,
+  players,
+  mmrHistory,
+  nameMap,
+  result,
+  margin
+}: {
+  match: Match;
+  matches: Match[];
+  players: Player[];
+  mmrHistory: MmrHistory[];
+  nameMap: Map<string, string>;
+  result: "A" | "B" | "DRAW";
+  margin: number;
+}) {
+  const changes = new Map(matchMmrChanges(match, players, mmrHistory).map((row) => [row.key, row.delta]));
+  const teamA = splitTeam(match.team_a).map((name) => playerNoteFor({ name, side: "A", match, result, margin, matches, nameMap, changes }));
+  const teamB = splitTeam(match.team_b).map((name) => playerNoteFor({ name, side: "B", match, result, margin, matches, nameMap, changes }));
+  return [...teamA, ...teamB];
+}
+
+function playerNoteFor({
+  name,
+  side,
+  match,
+  result,
+  margin,
+  matches,
+  nameMap,
+  changes
+}: {
+  name: string;
+  side: "A" | "B";
+  match: Match;
+  result: "A" | "B" | "DRAW";
+  margin: number;
+  matches: Match[];
+  nameMap: Map<string, string>;
+  changes: Map<string, number>;
+}): ReportPlayerNote {
+  const display = displayFromMap(name, nameMap);
+  const delta = changes.get(normalizeName(display)) ?? changes.get(normalizeName(name));
+  const team = side === "A" ? "Team A" : "Team B";
+  const won = result === side;
+  const lost = result !== "DRAW" && !won;
+  const run = result === "DRAW" ? currentRunWhere(name, match, matches, (item) => item !== "L") : currentRun(name, won ? "W" : "L", match, matches);
+  const ratingText = typeof delta === "number" && delta !== 0 ? ` ${signed(delta)} MMR.` : "";
+
+  let detail: string;
+  if (won && run >= 3) {
+    detail = `On the winning side again, now ${run} wins in a row.${ratingText}`;
+  } else if (won && margin === 1) {
+    detail = `Helped close out the one-goal win for ${team}.${ratingText}`;
+  } else if (won) {
+    detail = `Part of the ${team} win.${ratingText}`;
+  } else if (lost && margin === 1) {
+    detail = `Ended up on the wrong side by one, but kept ${team} right in it.${ratingText}`;
+  } else if (lost) {
+    detail = `Took the hit with ${team} after the result.${ratingText}`;
+  } else if (run >= 4) {
+    detail = `Shared the draw and stayed unbeaten, now ${run} without defeat.${ratingText}`;
+  } else {
+    detail = `Shared the draw for ${team}.${ratingText}`;
+  }
+
+  return {
+    name: display,
+    team,
+    tone: side === "A" ? "a" : "b",
+    detail: detail.trim()
+  };
+}
+
+function pairNote(
+  match: Match,
+  matches: Match[],
+  nameMap: Map<string, string>,
+  result: "A" | "B" | "DRAW",
+  avoidPeople: Set<string>
+) {
   if (result === "DRAW") return null;
   const side = result === "A" ? "A" : "B";
   const team = splitTeam(side === "A" ? match.team_a : match.team_b);
   const rows = pairRecords(team, matchesUpTo(match, matches), nameMap);
-  const best = rows.filter((row) => row.matches >= 3).sort((a, b) => b.pointsRate - a.pointsRate || b.matches - a.matches)[0];
+  const best = rows
+    .filter((row) => row.matches >= 3)
+    .sort((a, b) => relationshipVarietySort(a, b, avoidPeople, "pair"))[0];
   if (!best) return null;
   return {
-    title: "Best link",
-    body: `${best.a} + ${best.b} are now ${best.wins}-${best.draws}-${best.losses} together across ${best.matches} games.`
+    title: "Partnership note",
+    body: `${best.a} + ${best.b} are now ${best.wins}-${best.draws}-${best.losses} together across ${best.matches} games.`,
+    people: [normalizeName(best.a), normalizeName(best.b)]
   };
 }
 
-function rivalryNote(match: Match, matches: Match[], nameMap: Map<string, string>, result: "A" | "B" | "DRAW") {
+function rivalryNote(
+  match: Match,
+  matches: Match[],
+  nameMap: Map<string, string>,
+  result: "A" | "B" | "DRAW",
+  avoidPeople: Set<string>
+) {
   const teamA = splitTeam(match.team_a);
   const teamB = splitTeam(match.team_b);
   const rows = rivalryRecords(teamA, teamB, matchesUpTo(match, matches), nameMap);
-  const best = rows.filter((row) => row.matches >= 3).sort((a, b) => b.matches - a.matches || b.balance - a.balance)[0];
+  const best = rows
+    .filter((row) => row.matches >= 3)
+    .sort((a, b) => relationshipVarietySort(a, b, avoidPeople, "rivalry"))[0];
   if (!best) return null;
 
   if (result === "DRAW") {
     return {
       title: "Series status",
-      body: `${best.a} ${best.aWins}, ${best.b} ${best.bWins}, with ${best.draws} draws across ${best.matches} meetings.`
+      body: `${best.a} ${best.aWins}, ${best.b} ${best.bWins}, with ${best.draws} draws across ${best.matches} meetings.`,
+      people: [normalizeName(best.a), normalizeName(best.b)]
     };
   }
 
@@ -877,15 +1310,34 @@ function rivalryNote(match: Match, matches: Match[], nameMap: Map<string, string
   const record = `${winnerWins}-${best.draws}-${loserWins}`;
   const status =
     winnerWins > loserWins
-      ? `${winner} now leads the series ${record}`
+      ? `${winner} now leads ${loser} ${record}`
       : winnerWins === loserWins
-        ? `${winner} has tied the series at ${record}`
-        : `${winner} has cut the series gap to ${record}`;
+        ? `${winner} has pulled level with ${loser} at ${record}`
+        : `${winner} still trails ${loser} ${record}, but this chips away at the gap`;
 
   return {
     title: "Series status",
-    body: `${status} after ${best.matches} meetings with ${loser}.`
+    body: `${status} after ${best.matches} meetings.`,
+    people: [normalizeName(winner), normalizeName(loser)]
   };
+}
+
+function relationshipVarietySort<
+  T extends { a: string; b: string; matches: number; pointsRate?: number; balance?: number }
+>(a: T, b: T, avoidPeople: Set<string>, mode: "pair" | "rivalry") {
+  const aOverlap = relationshipOverlap(a, avoidPeople);
+  const bOverlap = relationshipOverlap(b, avoidPeople);
+  if (aOverlap !== bOverlap) return aOverlap - bOverlap;
+
+  if (mode === "pair") {
+    return numberOr(b.pointsRate, 0) - numberOr(a.pointsRate, 0) || b.matches - a.matches;
+  }
+
+  return b.matches - a.matches || numberOr(b.balance, 0) - numberOr(a.balance, 0);
+}
+
+function relationshipOverlap(row: { a: string; b: string }, avoidPeople: Set<string>) {
+  return [normalizeName(row.a), normalizeName(row.b)].filter((person) => avoidPeople.has(person)).length;
 }
 
 function pairRecords(team: string[], matches: Match[], nameMap: Map<string, string>) {
@@ -1070,6 +1522,18 @@ function displayFromName(name: string, players: Player[]) {
   return player ? displayName(player) : name;
 }
 
+function displayFromMap(name: string, nameMap: Map<string, string>) {
+  return nameMap.get(normalizeName(name)) || name;
+}
+
+function countOverlap(a: Set<string>, b: Set<string>) {
+  let count = 0;
+  for (const item of a) {
+    if (b.has(item)) count += 1;
+  }
+  return count;
+}
+
 function compareMatchesAsc(a: Match, b: Match) {
   return String(a.date || "").localeCompare(String(b.date || "")) || Number(a.id || 0) - Number(b.id || 0);
 }
@@ -1081,6 +1545,13 @@ function average(values: number[]) {
 function numberOr(value: unknown, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function resultScoreLabel(match: Match, result: "A" | "B" | "DRAW") {
+  const score = scoreParts(match.score);
+  if (!score) return match.score || "the recorded score";
+  if (result === "B") return `${score[1]}-${score[0]}`;
+  return `${score[0]}-${score[1]}`;
 }
 
 function signed(value: number) {

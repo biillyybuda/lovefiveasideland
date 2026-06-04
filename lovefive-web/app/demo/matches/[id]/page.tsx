@@ -88,22 +88,6 @@ export default async function DemoMatchReportPage({
             </section>
           ) : null}
 
-          {report.notes.length ? (
-            <section className="panel weekly-relationships-panel">
-              <div className="section-subhead">
-                <strong>Relationship Notes</strong>
-                <span>Partnerships and rivalries</span>
-              </div>
-              <div className="weekly-note-grid">
-                {report.notes.map((note) => (
-                  <div key={note.title}>
-                    <span>{note.title}</span>
-                    <strong>{note.body}</strong>
-                  </div>
-                ))}
-              </div>
-            </section>
-          ) : null}
         </main>
 
         <aside className="weekly-report-side">
@@ -134,8 +118,52 @@ export default async function DemoMatchReportPage({
 
           {report.previousMeeting ? (
             <section className="panel previous-meeting-panel">
-              <span>Previous Meeting</span>
-              <p>{report.previousMeeting.detail}</p>
+              <div className="section-subhead">
+                <strong>Previous Meeting</strong>
+              </div>
+              <div className="previous-meeting-topline">
+                <div>
+                  <span>Date</span>
+                  <strong>{report.previousMeeting.dateLabel}</strong>
+                </div>
+                <div>
+                  <span>Score</span>
+                  <strong>{report.previousMeeting.scoreLabel}</strong>
+                </div>
+              </div>
+              <div className="previous-report-sides">
+                {report.previousMeeting.sides.map((side) => (
+                  <div className={`similar-side-card ${side.tone}`} key={side.label}>
+                    <div className="previous-side-head">
+                      <strong>{side.label}</strong>
+                      <span>{side.keptCount}/{side.totalCount} kept</span>
+                    </div>
+                    <div className="mini-change-block">
+                      <div className="history-change-row previous">
+                        <small>Old</small>
+                        <div className="pill-row">
+                          {side.historicTeam.map((player) => (
+                            <span
+                              className={`pill ${side.missing.includes(player) ? "out" : "kept"}`}
+                              key={`${side.label}-old-${player}`}
+                            >
+                              {player}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="history-change-row subs">
+                        <small>Subs</small>
+                        <div className="pill-row">
+                          {side.subs.length ? side.subs.map((player) => (
+                            <span className="pill in" key={`${side.label}-sub-${player}`}>{player}</span>
+                          )) : <small>Same five</small>}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </section>
           ) : null}
         </aside>
