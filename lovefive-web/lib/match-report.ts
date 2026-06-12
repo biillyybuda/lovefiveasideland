@@ -11,12 +11,20 @@ import {
   type MmrHistory,
   type Player
 } from "./demo-data";
-import { expectedScore, scoreToResult, STARTING_MMR } from "./mmr-engine";
+import { calculateMatchMmrUpdates, expectedScore, scoreToResult, STARTING_MMR } from "./mmr-engine";
 
 type ReportFact = { label: string; value: string; detail: string; people?: string[] };
 type ReportChange = { label: string; value: string; detail: string; people?: string[] };
 type ReportNote = { title: string; body: string; people: string[] };
-type ReportPlayerNote = { name: string; team: "Team A" | "Team B"; tone: "a" | "b"; detail: string };
+type ReportPlayerNote = {
+  name: string;
+  team: "Team A" | "Team B";
+  tone: "a" | "b";
+  tag: string;
+  detail: string;
+  delta: number | null;
+};
+type PlayerDetailAngle = { tag: string; detail: string; priority: number };
 type PreviousMeetingSide = {
   label: string;
   tone: "a" | "b";
@@ -121,9 +129,14 @@ export function buildMatchReport({
   });
   const headline = headlineFor({ match, result, winnerLabel, margin, totalGoals, upset, candidates });
   const leadFact = leadFactFor(candidates, { result, winnerLabel, margin, totalGoals, upset });
-  const changes = buildChangeItems(candidates, leadFact);
+  const changes = buildChangeItems(
+    candidates,
+    leadFact,
+    seasonAwardChanges({ match, matches, players, mmrHistory, nameMap })
+  );
   const storylines = buildStorylines({
     match,
+    matches,
     result,
     winnerLabel,
     loserLabel,
@@ -165,7 +178,7 @@ export function buildMatchReport({
     ],
     storylines,
     changes,
-    playerNotes: buildPlayerNotes({ match, matches, players, mmrHistory, nameMap, result, margin }),
+    playerNotes: buildPlayerNotes({ match, matches, players, mmrHistory, nameMap, result, margin, candidates }),
     previousMeeting: previousMeetingFor(match, matches, nameMap),
     notes
   };
@@ -767,6 +780,7 @@ function summaryFollowUpFor(change: ReportChange | undefined) {
 
 function buildStorylines({
   match,
+  matches,
   result,
   winnerLabel,
   loserLabel,
@@ -779,6 +793,7 @@ function buildStorylines({
   leadFact
 }: {
   match: Match;
+  matches: Match[];
   result: "A" | "B" | "DRAW";
   winnerLabel: string;
   loserLabel: string;
@@ -796,54 +811,57 @@ function buildStorylines({
   const clearMargin = candidates.find((candidate) => candidate.key === "clear-margin");
   const ratingUpset = candidates.find((candidate) => candidate.key === "rating-upset");
   const ratingEdge = candidates.find((candidate) => candidate.key === "rating-edge-held");
+  const relationship = selectRelationshipAngle(candidates, leadFact);
   const streak = candidates.find((candidate) => candidate.factLabel === "Streak watch");
   const bounce = candidates.find((candidate) => candidate.factLabel === "Bounce watch");
   const stoppedRun = candidates.find((candidate) => candidate.factLabel === "Run stopped");
   const pressure = candidates.find((candidate) => candidate.factLabel === "Pressure point");
-  const extraAngle = selectStorylineAngle(candidates, leadFact);
+  const seasonAverageGoals = averageSeasonGoalsUpTo(match, matches);
 
   if (result === "DRAW") {
-    lines.push(`It finished ${match.score || "level"}, which kept this matchup unresolved rather than handing either side a clean swing.`);
+    lines.push("Neither side got the clean break, so the result keeps the matchup argument open for next time.");
   } else if (ratingUpset) {
-    lines.push(`${winnerLabel} turned the ratings on their head, winning despite being ${ratingUpset.factDetail}.`);
+    lines.push(`${winnerLabel} changed the tone of the matchup by making the pre-match numbers look too tidy.`);
   } else if (clearMargin) {
-    lines.push(`${winnerLabel} turned a close-looking matchup into a clear ${margin}-goal win.`);
+    lines.push(`${winnerLabel} did not just win the game; they made the last stretch feel comfortable.`);
   } else if (closeGame) {
-    lines.push(`${winnerLabel} had to live on fine margins, with a single goal deciding the result.`);
+    lines.push(`${winnerLabel} spent the night close enough to be caught, then found enough to close it out.`);
   } else if (ratingEdge) {
-    lines.push(`${winnerLabel} had the rating edge and turned it into a ${margin}-goal win.`);
+    lines.push(`${winnerLabel} kept control of the game state instead of letting the underdog route open up.`);
   } else {
-    lines.push(`${winnerLabel} did enough to keep ${loserLabel} at arm's length.`);
+    lines.push(`${winnerLabel} kept ${loserLabel} at arm's length without needing a dramatic swing.`);
   }
 
   if (scoreHeat) {
-    lines.push(`${totalGoals} goals made it one of the livelier games in the archive.`);
+    lines.push("The scoring stayed lively enough that both teams kept leaving evidence in the result.");
   } else if (closeGame && favourite === "Level") {
-    lines.push(`With only ${ratingGap} MMR between the teams before kick-off, this always looked close on paper; the scoreline backed that up.`);
+    lines.push("The close finish felt earned rather than random, because the teams came in with very little between them.");
   } else if (closeGame) {
     lines.push(`${loserLabel} were close enough to keep asking the question, but never close enough to stop the result landing.`);
-  } else if (totalGoals && margin > 0 && !clearMargin && !closeGame) {
-    lines.push(`The score finished ${match.score || "recorded"}, with ${margin} goals between the teams.`);
+  } else if (totalGoals >= 16 && margin > 0) {
+    lines.push(scorePaceLine(totalGoals, seasonAverageGoals));
+  } else if (margin > 0 && !clearMargin && !closeGame) {
+    lines.push(`${loserLabel} never quite found the spell that would turn pressure into a proper chase.`);
   } else if (result === "DRAW") {
-    lines.push(scoreHeat ? `${totalGoals} goals still could not split them.` : "The draw matters most because neither side got a clean break in the matchup.");
+    lines.push(scoreHeat ? "Even the busier scoreline could not separate the sides." : "The draw matters most because neither side got a clean break in the matchup.");
   }
 
-  if (streak && pressure && !overlapsFact(streak, leadFact) && !overlapsFact(pressure, leadFact)) {
-    lines.push(`The form table split two ways: ${streak.factValue}, while ${pressure.factValue}.`);
+  if (relationship) {
+    lines.push(relationship.line);
+  } else if (streak && pressure && !overlapsFact(streak, leadFact) && !overlapsFact(pressure, leadFact)) {
+    lines.push("The form table moved in opposite directions, so the result will feel very different player to player.");
   } else if (streak && bounce && !overlapsFact(streak, leadFact) && !overlapsFact(bounce, leadFact)) {
-    lines.push(`The form angle is the interesting bit: ${streak.factValue}, and ${bounce.factValue}.`);
+    lines.push("The form angle is split between a run continuing and a reset finally landing.");
   } else if (streak && stoppedRun && !overlapsFact(streak, leadFact) && !overlapsFact(stoppedRun, leadFact)) {
-    lines.push(`${streak.factValue}, while ${stoppedRun.factValue}.`);
+    lines.push("One run survives the night while another gets clipped, which gives the result a bit more bite.");
   } else if (bounce && pressure && !overlapsFact(bounce, leadFact) && !overlapsFact(pressure, leadFact)) {
-    lines.push(`${bounce.factValue}, while ${pressure.factValue}.`);
-  } else if (extraAngle) {
-    lines.push(extraAngle.line);
+    lines.push("For one player this was a reset; for another it leaves the next match carrying extra weight.");
   }
 
   return uniqueStrings(lines).slice(0, 3);
 }
 
-function buildChangeItems(candidates: StoryCandidate[], leadFact: ReportFact): ReportChange[] {
+function buildChangeItems(candidates: StoryCandidate[], leadFact: ReportFact, awardChanges: ReportChange[] = []): ReportChange[] {
   const consequenceLabels = new Set([
     "Streak watch",
     "Momentum watch",
@@ -866,7 +884,261 @@ function buildChangeItems(candidates: StoryCandidate[], leadFact: ReportFact): R
     people: candidate.people || []
   }));
 
-  return dedupeChanges(changes).slice(0, 4);
+  return dedupeChanges([...awardChanges, ...changes]).slice(0, 4);
+}
+
+function seasonAwardChanges({
+  match,
+  matches,
+  players,
+  mmrHistory,
+  nameMap
+}: {
+  match: Match;
+  matches: Match[];
+  players: Player[];
+  mmrHistory: MmrHistory[];
+  nameMap: Map<string, string>;
+}): ReportChange[] {
+  const season = String(match.date || "").slice(0, 4);
+  if (!/^\d{4}$/.test(season)) return [];
+
+  const before = seasonAwardSnapshot({ match, matches: matchesBefore(match, matches), players, mmrHistory, nameMap, season });
+  const after = seasonAwardSnapshot({ match, matches: matchesUpTo(match, matches), players, mmrHistory, nameMap, season });
+  if (!after) return [];
+
+  const changes: ReportChange[] = [];
+  const afterMvp = after.mvp[0];
+  const beforeMvp = before?.mvp[0] || null;
+  const nextMvp = after.mvp[1] || null;
+
+  if (afterMvp) {
+    const changed = beforeMvp && beforeMvp.key !== afterMvp.key;
+    changes.push({
+      label: "MVP race",
+      value: changed ? `${afterMvp.name} takes #1` : `${afterMvp.name} leads`,
+      detail: awardRaceDetail(season, afterMvp.score, nextMvp ? `${nextMvp.name} ${nextMvp.score} pts` : null),
+      people: [afterMvp.key]
+    });
+  }
+
+  const afterImproved = after.improved[0];
+  const beforeImproved = before?.improved[0] || null;
+  const nextImproved = after.improved[1] || null;
+
+  if (afterImproved) {
+    changes.push(improvedRaceChange(match, afterImproved, beforeImproved, nextImproved));
+  }
+
+  return changes;
+}
+
+function improvedRaceChange(
+  match: Match,
+  leader: { key: string; name: string; change: number },
+  previousLeader: { key: string; name: string; change: number } | null,
+  next: { key: string; name: string; change: number } | null
+): ReportChange {
+  const participantKeys = new Set([...splitTeam(match.team_a), ...splitTeam(match.team_b)].map(normalizeName));
+  const leaderPlayed = participantKeys.has(leader.key);
+  const nextPlayed = next ? participantKeys.has(next.key) : false;
+  const changed = previousLeader && previousLeader.key !== leader.key;
+
+  if (!leaderPlayed && next && nextPlayed && next.change === leader.change) {
+    return {
+      label: "Most improved",
+      value: `${next.name} moves level`,
+      detail: `${signed(next.change)} MMR; level with ${leader.name}`,
+      people: [next.key, leader.key]
+    };
+  }
+
+  if (!leaderPlayed && next && nextPlayed) {
+    const gap = leader.change - next.change;
+    return {
+      label: "Most improved",
+      value: `${next.name} closes in`,
+      detail: `${signed(next.change)} MMR; ${gap} behind ${leader.name}`,
+      people: [next.key, leader.key]
+    };
+  }
+
+  return {
+    label: "Most improved",
+    value: changed ? `${leader.name} takes #1` : `${leader.name} holds on`,
+    detail: improvementRaceDetail(leader.change, next),
+    people: [leader.key]
+  };
+}
+
+function seasonAwardSnapshot({
+  match,
+  matches,
+  players,
+  mmrHistory,
+  nameMap,
+  season
+}: {
+  match: Match;
+  matches: Match[];
+  players: Player[];
+  mmrHistory: MmrHistory[];
+  nameMap: Map<string, string>;
+  season: string;
+}) {
+  const seasonMatches = matches
+    .filter((row) => String(row.date || "").startsWith(`${season}-`) && scoreParts(row.score))
+    .sort(compareMatchesAsc);
+  if (!seasonMatches.length) return null;
+
+  const seasonHistory = mmrHistory.filter((row) => String(row.date || "").startsWith(`${season}-`));
+  const minimumMatches = minimumAwardMatches(seasonMatches.length);
+  const allPlayerRows = players.map((player) => seasonAwardPlayer(player, seasonMatches, seasonHistory, nameMap));
+  const playerRows = allPlayerRows.filter((row) => row.played >= minimumMatches);
+  const seasonRatings = seasonOnlyAwardRatings(allPlayerRows, seasonMatches);
+
+  return {
+    mvp: playerRows
+      .map((row) => ({
+        ...row,
+        seasonRating: seasonRatings.get(row.id) ?? STARTING_MMR,
+        score: ratingPoints(seasonRatings.get(row.id) ?? STARTING_MMR) + Math.round((row.played / Math.max(seasonMatches.length, 1)) * 20)
+      }))
+      .sort((a, b) => b.score - a.score || b.seasonRating - a.seasonRating || b.played - a.played || b.recordPoints - a.recordPoints),
+    improved: playerRows
+      .filter((row) => Number.isFinite(row.change))
+      .sort((a, b) => b.change - a.change),
+    match
+  };
+}
+
+function seasonAwardPlayer(player: Player, matches: Match[], history: MmrHistory[], nameMap: Map<string, string>) {
+  const name = displayName(player);
+  const keys = [player.name, player.display_name, name].map(normalizeName).filter(Boolean);
+  let wins = 0;
+  let draws = 0;
+  const playedMatches = matches.filter((match) => {
+    const teamA = splitTeam(match.team_a).map(normalizeName);
+    const teamB = splitTeam(match.team_b).map(normalizeName);
+    const side = keys.some((key) => teamA.includes(key)) ? "A" : keys.some((key) => teamB.includes(key)) ? "B" : null;
+    if (side) {
+      const playerResult = resultFor(match, side);
+      wins += playerResult === "W" ? 1 : 0;
+      draws += playerResult === "D" ? 1 : 0;
+    }
+    return Boolean(side);
+  });
+  const rows = history
+    .filter((row) => row.player_id === player.id && matches.some((match) => match.id === row.match_id))
+    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || Number(a.id || 0) - Number(b.id || 0));
+  const first = rows[0];
+  const last = rows.at(-1);
+  const startMmr = numberOr(first?.mmr_before, STARTING_MMR);
+  const currentMmr = numberOr(last?.mmr_after, numberOr(player.mmr, STARTING_MMR));
+
+  return {
+    ...player,
+    matchNames: [player.name, player.display_name, name].filter(Boolean),
+    key: normalizeName(name),
+    name: nameMap.get(normalizeName(name)) || name,
+    played: playedMatches.length,
+    startMmr,
+    currentMmr,
+    change: Math.round(currentMmr - startMmr),
+    recordPoints: wins * 3 + draws
+  };
+}
+
+function seasonOnlyAwardRatings(players: ReturnType<typeof seasonAwardPlayer>[], matches: Match[]) {
+  const seedRatings = seededAwardStarts(players);
+  const state = new Map<number, Player>(
+    players.map((player) => [
+      player.id,
+      {
+        ...player,
+        mmr: seedRatings.get(player.id) ?? STARTING_MMR
+      }
+    ])
+  );
+  const nameLookup = new Map<string, Player>();
+
+  for (const player of state.values()) {
+    const aliases = "matchNames" in player && Array.isArray(player.matchNames) ? player.matchNames : [player.name, player.display_name];
+    for (const alias of aliases) {
+      addPlayerLookup(nameLookup, alias, player);
+    }
+  }
+
+  const orderedMatches = [...matches]
+    .filter((match) => scoreParts(match.score))
+    .sort(compareMatchesAsc);
+
+  for (const match of orderedMatches) {
+    const teamA = resolveSeasonTeam(match.team_a, nameLookup);
+    const teamB = resolveSeasonTeam(match.team_b, nameLookup);
+    if (!teamA.length || !teamB.length) continue;
+
+    const updates = calculateMatchMmrUpdates({
+      teamA,
+      teamB,
+      match,
+      players: Array.from(state.values())
+    });
+
+    for (const update of updates) {
+      const player = state.get(update.player.id);
+      if (player) player.mmr = Math.round(update.after);
+    }
+  }
+
+  return new Map(Array.from(state.values()).map((player) => [player.id, Number(player.mmr || STARTING_MMR)]));
+}
+
+function seededAwardStarts(players: ReturnType<typeof seasonAwardPlayer>[]) {
+  const involved = players.filter((player) => Number(player.played || 0) > 0);
+  const startValues = involved.map((player) => numberOr(player.startMmr, STARTING_MMR));
+  const leagueAverage = average(startValues);
+
+  return new Map(
+    players.map((player) => {
+      const start = numberOr(player.startMmr, numberOr(player.mmr, STARTING_MMR));
+      const seeded = STARTING_MMR + (start - leagueAverage) * 0.35;
+      return [player.id, Math.round(seeded)] as const;
+    })
+  );
+}
+
+function addPlayerLookup(lookup: Map<string, Player>, value: string | null | undefined, player: Player) {
+  const key = normalizeName(value);
+  if (key && !lookup.has(key)) lookup.set(key, player);
+}
+
+function resolveSeasonTeam(value: string | null | undefined, lookup: Map<string, Player>) {
+  const seen = new Set<number>();
+  const team: Player[] = [];
+
+  for (const name of splitTeam(value)) {
+    const player = lookup.get(normalizeName(name));
+    if (!player || seen.has(player.id)) continue;
+    team.push(player);
+    seen.add(player.id);
+  }
+
+  return team;
+}
+
+function awardRaceDetail(season: string, score: number, next: string | null) {
+  return next ? `${season} leader, ${score} pts; next ${next}` : `${season} leader, ${score} MVP pts`;
+}
+
+function improvementRaceDetail(change: number, next: { name: string; change: number } | null) {
+  if (!next) return `${signed(change)} MMR this season`;
+  const gap = change - next.change;
+  return gap <= 0
+    ? `${signed(change)} MMR; level with ${next.name}`
+    : gap <= 6
+      ? `${signed(change)} MMR; ${next.name} only ${gap} back`
+    : `${signed(change)} MMR; ${next.name} next at ${signed(next.change)}`;
 }
 
 function selectStorylineAngle(candidates: StoryCandidate[], leadFact: ReportFact) {
@@ -881,6 +1153,14 @@ function selectStorylineAngle(candidates: StoryCandidate[], leadFact: ReportFact
   ]);
   const eligible = candidates
     .filter((candidate) => candidate.factLabel && storylineLabels.has(candidate.factLabel))
+    .filter((candidate) => candidate.factLabel !== leadFact.label || candidate.factValue !== leadFact.value);
+
+  return selectDiverseCandidates(eligible, 1, peopleFromFact(leadFact))[0] || null;
+}
+
+function selectRelationshipAngle(candidates: StoryCandidate[], leadFact: ReportFact) {
+  const eligible = candidates
+    .filter((candidate) => candidate.factLabel === "Partnership watch" || candidate.factLabel === "Rivalry watch")
     .filter((candidate) => candidate.factLabel !== leadFact.label || candidate.factValue !== leadFact.value);
 
   return selectDiverseCandidates(eligible, 1, peopleFromFact(leadFact))[0] || null;
@@ -1106,36 +1386,37 @@ function ratingFactFor({
 }
 
 function scoreProfileFact(match: Match, matches: Match[], margin: number, totalGoals: number, leadLabel: string): ReportFact {
-  const previousScores = matchesBefore(match, matches)
+  const currentSeasonMatches = seasonMatchesUpTo(match, matches);
+  const currentSeasonScores = currentSeasonMatches
     .map((row) => scoreParts(row.score))
     .filter((score): score is [number, number] => Boolean(score));
-  const previousTotals = previousScores.map((score) => score[0] + score[1]);
-  const averagePreviousTotal = previousTotals.length ? average(previousTotals) : 0;
-  const maxPreviousTotal = previousTotals.length ? Math.max(...previousTotals) : 0;
+  const currentSeasonTotals = currentSeasonScores.map((score) => score[0] + score[1]);
+  const currentSeasonAverage = currentSeasonTotals.length ? average(currentSeasonTotals) : 0;
+  const maxSeasonTotal = currentSeasonTotals.length ? Math.max(...currentSeasonTotals) : 0;
+  const seasonAverageLabel = currentSeasonAverage ? `${totalGoals} goals vs ${currentSeasonAverage.toFixed(1)} season avg` : `${totalGoals} total goals`;
 
   if (leadLabel === "Score heat") {
     return {
       label: "Margin check",
       value: margin ? `${margin}-goal gap` : "Level",
-      detail: totalGoals ? `${totalGoals} total goals` : "Score recorded"
+      detail: totalGoals ? seasonAverageLabel : "Score recorded"
     };
   }
 
   if (leadLabel === "Fine margins" || leadLabel === "Separation") {
-    if (totalGoals && averagePreviousTotal) {
-      const averageLabel = `${totalGoals} goals vs ${averagePreviousTotal.toFixed(1)} avg`;
-      if (totalGoals <= averagePreviousTotal - 2) {
+    if (totalGoals && currentSeasonAverage) {
+      if (totalGoals <= currentSeasonAverage - 2) {
         return {
           label: "Score profile",
           value: "Tighter than usual",
-          detail: averageLabel
+          detail: seasonAverageLabel
         };
       }
-      if (totalGoals >= averagePreviousTotal + 2) {
+      if (totalGoals >= currentSeasonAverage + 2) {
         return {
           label: "Score profile",
           value: "Busier than usual",
-          detail: averageLabel
+          detail: seasonAverageLabel
         };
       }
     }
@@ -1143,23 +1424,23 @@ function scoreProfileFact(match: Match, matches: Match[], margin: number, totalG
     return {
       label: "Score profile",
       value: totalGoals ? `${totalGoals} goals` : "Recorded",
-      detail: averagePreviousTotal ? `${averagePreviousTotal.toFixed(1)} archive average` : "No archive average yet"
+      detail: currentSeasonAverage ? seasonAverageLabel : "No season average yet"
     };
   }
 
-  if (totalGoals && previousTotals.length >= 5 && totalGoals >= maxPreviousTotal) {
+  if (totalGoals && currentSeasonTotals.length >= 5 && totalGoals >= maxSeasonTotal) {
     return {
       label: "Score profile",
-      value: "Archive high",
-      detail: `${totalGoals} total goals`
+      value: "Season high",
+      detail: seasonAverageLabel
     };
   }
 
-  if (totalGoals && averagePreviousTotal && totalGoals >= averagePreviousTotal + 5) {
+  if (totalGoals && currentSeasonAverage && totalGoals >= currentSeasonAverage + 5) {
     return {
       label: "Score profile",
       value: "High tempo",
-      detail: `${totalGoals} goals vs ${averagePreviousTotal.toFixed(1)} avg`
+      detail: seasonAverageLabel
     };
   }
 
@@ -1182,8 +1463,27 @@ function scoreProfileFact(match: Match, matches: Match[], margin: number, totalG
   return {
     label: "Score profile",
     value: margin ? `${margin}-goal gap` : "Level",
-    detail: totalGoals ? `${totalGoals} total goals` : "Score recorded"
+    detail: totalGoals ? seasonAverageLabel : "Score recorded"
   };
+}
+
+function averageSeasonGoalsUpTo(match: Match, matches: Match[]) {
+  const totals = seasonMatchesUpTo(match, matches)
+    .map((row) => scoreParts(row.score))
+    .filter((score): score is [number, number] => Boolean(score))
+    .map((score) => score[0] + score[1]);
+  return totals.length ? average(totals) : 0;
+}
+
+function scorePaceLine(totalGoals: number, seasonAverage: number) {
+  if (!seasonAverage) return `The ${totalGoals}-goal finish gave the game plenty of movement without changing the basic read.`;
+  if (totalGoals >= seasonAverage + 2) {
+    return "The scoring pace ran above the season norm, so the scoreboard had more heat than usual.";
+  }
+  if (totalGoals <= seasonAverage - 2) {
+    return "The scoring pace sat below the season norm, so this was tighter than the raw score first looks.";
+  }
+  return "The scoring pace sat right around the season norm: busy, but not unusual for 2026.";
 }
 
 function buildPlayerNotes({
@@ -1193,7 +1493,8 @@ function buildPlayerNotes({
   mmrHistory,
   nameMap,
   result,
-  margin
+  margin,
+  candidates
 }: {
   match: Match;
   matches: Match[];
@@ -1202,11 +1503,143 @@ function buildPlayerNotes({
   nameMap: Map<string, string>;
   result: "A" | "B" | "DRAW";
   margin: number;
+  candidates: StoryCandidate[];
 }) {
   const changes = new Map(matchMmrChanges(match, players, mmrHistory).map((row) => [row.key, row.delta]));
-  const teamA = splitTeam(match.team_a).map((name) => playerNoteFor({ name, side: "A", match, result, margin, matches, nameMap, changes }));
-  const teamB = splitTeam(match.team_b).map((name) => playerNoteFor({ name, side: "B", match, result, margin, matches, nameMap, changes }));
+  const angles = playerDetailAngles({ match, matches, players, mmrHistory, nameMap, candidates });
+  const usedTags = new Map<string, number>();
+  const teamA = splitTeam(match.team_a).map((name) => playerNoteFor({ name, side: "A", match, result, margin, matches, nameMap, changes, angles, usedTags }));
+  const teamB = splitTeam(match.team_b).map((name) => playerNoteFor({ name, side: "B", match, result, margin, matches, nameMap, changes, angles, usedTags }));
   return [...teamA, ...teamB];
+}
+
+function playerDetailAngles({
+  match,
+  matches,
+  players,
+  mmrHistory,
+  nameMap,
+  candidates
+}: {
+  match: Match;
+  matches: Match[];
+  players: Player[];
+  mmrHistory: MmrHistory[];
+  nameMap: Map<string, string>;
+  candidates: StoryCandidate[];
+}) {
+  const angles = new Map<string, PlayerDetailAngle[]>();
+  addSeasonAwardPlayerAngles(angles, { match, matches, players, mmrHistory, nameMap });
+
+  for (const candidate of candidates) {
+    if (!candidate.people?.length) continue;
+    const angle = candidateAngle(candidate);
+    if (!angle) continue;
+    for (const person of candidate.people) {
+      addPlayerAngle(angles, person, angle);
+    }
+  }
+
+  return angles;
+}
+
+function addSeasonAwardPlayerAngles(
+  angles: Map<string, PlayerDetailAngle[]>,
+  {
+    match,
+    matches,
+    players,
+    mmrHistory,
+    nameMap
+  }: {
+    match: Match;
+    matches: Match[];
+    players: Player[];
+    mmrHistory: MmrHistory[];
+    nameMap: Map<string, string>;
+  }
+) {
+  const season = String(match.date || "").slice(0, 4);
+  if (!/^\d{4}$/.test(season)) return;
+  const snapshot = seasonAwardSnapshot({ match, matches: matchesUpTo(match, matches), players, mmrHistory, nameMap, season });
+  if (!snapshot) return;
+
+  const mvp = snapshot.mvp[0];
+  const mvpChaser = snapshot.mvp[1];
+  if (mvp) {
+    addPlayerAngle(angles, mvp.key, {
+      tag: "MVP leader",
+      detail: mvpChaser
+        ? `Leads the ${season} MVP race on ${mvp.score} pts; ${mvpChaser.name} next on ${mvpChaser.score}.`
+        : `Leads the ${season} MVP race on ${mvp.score} pts.`,
+      priority: 130
+    });
+  }
+  if (mvpChaser && mvp && mvp.score - mvpChaser.score <= 12) {
+    addPlayerAngle(angles, mvpChaser.key, {
+      tag: "MVP chase",
+      detail: `${mvpChaser.score} MVP pts, ${mvp.score - mvpChaser.score} behind ${mvp.name}.`,
+      priority: 104
+    });
+  }
+
+  const improved = snapshot.improved[0];
+  const improvedChaser = snapshot.improved[1];
+  const participantKeys = new Set([...splitTeam(match.team_a), ...splitTeam(match.team_b)].map(normalizeName));
+  if (improved) {
+    const gap = improvedChaser ? improved.change - improvedChaser.change : null;
+    addPlayerAngle(angles, improved.key, {
+      tag: "Most improved",
+      detail:
+        improvedChaser && gap !== null && gap <= 0
+          ? `Joint-top for ${season} improvement at ${signed(improved.change)} MMR.`
+          : improvedChaser && gap !== null && gap <= 8
+            ? `Top of Most Improved at ${signed(improved.change)} MMR; ${improvedChaser.name} is ${gap} back.`
+            : `Top of Most Improved at ${signed(improved.change)} MMR this season.`,
+      priority: 128
+    });
+  }
+  if (improvedChaser && improved && improved.change - improvedChaser.change <= 8) {
+    const chaserPlayed = participantKeys.has(improvedChaser.key);
+    addPlayerAngle(angles, improvedChaser.key, {
+      tag: "Improver chase",
+      detail:
+        chaserPlayed && improvedChaser.change === improved.change
+          ? `Moved level with ${improved.name} at ${signed(improvedChaser.change)} MMR this season.`
+          : `${signed(improvedChaser.change)} MMR this season, still close to ${improved.name}.`,
+      priority: 102
+    });
+  }
+}
+
+function candidateAngle(candidate: StoryCandidate): PlayerDetailAngle | null {
+  if (!candidate.factLabel || !candidate.factValue || !candidate.factDetail) return null;
+  if (candidate.factLabel === "Bounce watch") {
+    return { tag: "Bounce", detail: `${candidate.factValue}. ${candidate.factDetail}.`, priority: 112 };
+  }
+  if (candidate.factLabel === "Streak watch") {
+    return { tag: "Streak", detail: `${candidate.factValue}. ${candidate.factDetail}.`, priority: 106 };
+  }
+  if (candidate.factLabel === "Run stopped") {
+    return { tag: "Run stopped", detail: `${candidate.factValue}. ${candidate.factDetail}.`, priority: 104 };
+  }
+  if (candidate.factLabel === "Pressure point") {
+    return { tag: "Pressure", detail: `${candidate.factValue}. ${candidate.factDetail}.`, priority: 100 };
+  }
+  if (candidate.factLabel === "Rivalry watch") {
+    return { tag: "Rivalry", detail: candidate.line, priority: 92 };
+  }
+  if (candidate.factLabel === "Partnership watch") {
+    return { tag: "Partnership", detail: candidate.line, priority: 88 };
+  }
+  return null;
+}
+
+function addPlayerAngle(angles: Map<string, PlayerDetailAngle[]>, person: string, angle: PlayerDetailAngle) {
+  const key = normalizeName(person);
+  const rows = angles.get(key) || [];
+  rows.push(angle);
+  angles.set(key, rows);
 }
 
 function playerNoteFor({
@@ -1217,7 +1650,9 @@ function playerNoteFor({
   margin,
   matches,
   nameMap,
-  changes
+  changes,
+  angles,
+  usedTags
 }: {
   name: string;
   side: "A" | "B";
@@ -1227,6 +1662,8 @@ function playerNoteFor({
   matches: Match[];
   nameMap: Map<string, string>;
   changes: Map<string, number>;
+  angles: Map<string, PlayerDetailAngle[]>;
+  usedTags: Map<string, number>;
 }): ReportPlayerNote {
   const display = displayFromMap(name, nameMap);
   const delta = changes.get(normalizeName(display)) ?? changes.get(normalizeName(name));
@@ -1234,31 +1671,53 @@ function playerNoteFor({
   const won = result === side;
   const lost = result !== "DRAW" && !won;
   const run = result === "DRAW" ? currentRunWhere(name, match, matches, (item) => item !== "L") : currentRun(name, won ? "W" : "L", match, matches);
-  const ratingText = typeof delta === "number" && delta !== 0 ? ` ${signed(delta)} MMR.` : "";
+  const ratingMove = typeof delta === "number" && delta !== 0 ? `${signed(delta)} MMR` : "No MMR move";
+  const availableAngles = [...(angles.get(normalizeName(display)) || []), ...(angles.get(normalizeName(name)) || [])];
 
-  let detail: string;
-  if (won && run >= 3) {
-    detail = `On the winning side again, now ${run} wins in a row.${ratingText}`;
+  let fallback: PlayerDetailAngle;
+  if (typeof delta === "number" && delta >= 14) {
+    fallback = { tag: "Big lift", detail: `One of the strongest rating moves from the game. ${ratingMove}.`, priority: 62 };
+  } else if (typeof delta === "number" && delta >= 8) {
+    fallback = { tag: "Lift", detail: `Rating moved up with the result. ${ratingMove}.`, priority: 50 };
+  } else if (typeof delta === "number" && delta <= -16) {
+    fallback = { tag: "Heavy hit", detail: `One of the sharper rating drops from the game. ${ratingMove}.`, priority: 62 };
+  } else if (typeof delta === "number" && delta <= -8) {
+    fallback = { tag: "Hit", detail: `Rating moved against ${team}. ${ratingMove}.`, priority: 50 };
+  } else if (won && run >= 3) {
+    fallback = { tag: "Streak", detail: `${run} wins in a row after this result. ${ratingMove}.`, priority: 46 };
   } else if (won && margin === 1) {
-    detail = `Helped close out the one-goal win for ${team}.${ratingText}`;
+    fallback = { tag: "Edged it", detail: `Finished on the right side of the tight one. ${ratingMove}.`, priority: 38 };
   } else if (won) {
-    detail = `Part of the ${team} win.${ratingText}`;
+    fallback = { tag: "Winner", detail: `Banked the win with ${team}. ${ratingMove}.`, priority: 20 };
   } else if (lost && margin === 1) {
-    detail = `Ended up on the wrong side by one, but kept ${team} right in it.${ratingText}`;
+    fallback = { tag: "Close hit", detail: `Lost by one, so the damage stays narrow. ${ratingMove}.`, priority: 38 };
   } else if (lost) {
-    detail = `Took the hit with ${team} after the result.${ratingText}`;
+    fallback = { tag: "Hit", detail: `Result moved against ${team}. ${ratingMove}.`, priority: 20 };
   } else if (run >= 4) {
-    detail = `Shared the draw and stayed unbeaten, now ${run} without defeat.${ratingText}`;
+    fallback = { tag: "Unbeaten", detail: `${run} without defeat after the draw. ${ratingMove}.`, priority: 42 };
   } else {
-    detail = `Shared the draw for ${team}.${ratingText}`;
+    fallback = { tag: "Draw", detail: `Shared the result for ${team}. ${ratingMove}.`, priority: 20 };
   }
+  const selected = selectPlayerDetailAngle([...availableAngles, fallback], usedTags);
+  usedTags.set(selected.tag, (usedTags.get(selected.tag) || 0) + 1);
 
   return {
     name: display,
     team,
     tone: side === "A" ? "a" : "b",
-    detail: detail.trim()
+    tag: selected.tag,
+    detail: selected.detail.trim(),
+    delta: typeof delta === "number" ? delta : null
   };
+}
+
+function selectPlayerDetailAngle(angles: PlayerDetailAngle[], usedTags: Map<string, number>) {
+  return [...angles].sort((a, b) => playerAngleScore(b, usedTags) - playerAngleScore(a, usedTags))[0];
+}
+
+function playerAngleScore(angle: PlayerDetailAngle, usedTags: Map<string, number>) {
+  const used = usedTags.get(angle.tag) || 0;
+  return angle.priority - used * 24;
 }
 
 function pairNote(
@@ -1503,6 +1962,12 @@ function matchesUpTo(match: Match, matches: Match[]) {
   return matches.filter((row) => compareMatchesAsc(row, match) <= 0);
 }
 
+function seasonMatchesUpTo(match: Match, matches: Match[]) {
+  const season = String(match.date || "").slice(0, 4);
+  if (!/^\d{4}$/.test(season)) return matchesUpTo(match, matches);
+  return matchesUpTo(match, matches).filter((row) => String(row.date || "").startsWith(`${season}-`));
+}
+
 function matchesBefore(match: Match, matches: Match[]) {
   return matches.filter((row) => compareMatchesAsc(row, match) < 0);
 }
@@ -1565,6 +2030,16 @@ function resultScoreLabel(match: Match, result: "A" | "B" | "DRAW") {
   if (!score) return match.score || "the recorded score";
   if (result === "B") return `${score[1]}-${score[0]}`;
   return `${score[0]}-${score[1]}`;
+}
+
+function ratingPoints(rating: number) {
+  const scaled = ((rating - 900) / 200) * 80;
+  return Math.round(Math.max(0, Math.min(80, scaled)));
+}
+
+function minimumAwardMatches(matchCount: number) {
+  if (matchCount <= 3) return 1;
+  return Math.max(3, Math.ceil(matchCount * 0.25));
 }
 
 function signed(value: number) {

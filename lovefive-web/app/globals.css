@@ -2207,6 +2207,12 @@ tr:last-child td {
   justify-items: start;
 }
 
+.match-report-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .match-report-page-head h1 {
   margin-bottom: 0;
 }
@@ -2235,6 +2241,193 @@ tr:last-child td {
   background: rgba(255, 255, 255, 0.032);
   font-size: 0.78rem;
   font-weight: 850;
+}
+
+.match-share-page {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 18px 12px 36px;
+}
+
+.match-share-card {
+  display: grid;
+  gap: 14px;
+  width: min(760px, 100%);
+  min-height: min(960px, calc(100vh - 48px));
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 0 0, rgba(84, 168, 255, 0.14), transparent 34%),
+    radial-gradient(circle at 100% 12%, rgba(255, 111, 125, 0.12), transparent 32%),
+    #080d10;
+  box-shadow: var(--shadow);
+}
+
+.match-share-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: end;
+}
+
+.match-share-head span,
+.match-share-facts span,
+.match-share-mini-list span,
+.match-share-lineups span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 950;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.match-share-head h1 {
+  max-width: 540px;
+  margin: 6px 0 8px;
+  color: var(--text);
+  font-size: clamp(2rem, 4.5vw, 3.4rem);
+  line-height: 1;
+}
+
+.match-share-head small {
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.match-share-score {
+  display: grid;
+  grid-template-columns: auto auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.match-share-score strong {
+  color: var(--text);
+  font-size: clamp(2.2rem, 6vw, 4.1rem);
+  line-height: 0.9;
+}
+
+.match-share-score em {
+  color: var(--text);
+  font-style: normal;
+  font-weight: 950;
+}
+
+.match-share-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.match-share-facts > div,
+.match-share-section,
+.match-share-lineups > div {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.026);
+}
+
+.match-share-facts > div {
+  display: grid;
+  gap: 4px;
+  min-height: 84px;
+  padding: 12px;
+}
+
+.match-share-facts strong,
+.match-share-section > strong,
+.match-share-lineups strong {
+  color: var(--text);
+}
+
+.match-share-facts small {
+  color: var(--muted);
+  font-weight: 850;
+}
+
+.match-share-section {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.match-share-lines {
+  display: grid;
+  gap: 8px;
+}
+
+.match-share-lines p {
+  position: relative;
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text);
+  font-weight: 900;
+  line-height: 1.35;
+}
+
+.match-share-lines p::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.52em;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px rgba(128, 214, 79, 0.18);
+}
+
+.match-share-two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.match-share-mini-list {
+  display: grid;
+  gap: 8px;
+}
+
+.match-share-mini-list > div {
+  display: grid;
+  gap: 2px;
+  min-height: 46px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.022);
+}
+
+.match-share-mini-list b {
+  color: var(--text);
+  font-size: 0.94rem;
+}
+
+.match-share-lineups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.match-share-lineups > div {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+}
+
+.match-share-lineups strong {
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+
+.match-share-full-link {
+  justify-self: center;
 }
 
 .weekly-report-main,
@@ -2355,6 +2548,59 @@ tr:last-child td {
   gap: 12px;
 }
 
+.report-player-details {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.022);
+}
+
+.report-player-details summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.report-player-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.report-player-details summary span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 950;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.report-player-details summary strong {
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.report-player-details summary::after {
+  content: "+";
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  font-weight: 950;
+}
+
+.report-player-details[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.report-player-details[open] summary::after {
+  content: "-";
+}
+
 .weekly-player-grid > div.a {
   border-color: rgba(84, 168, 255, 0.22);
   background: rgba(84, 168, 255, 0.042);
@@ -2363,6 +2609,107 @@ tr:last-child td {
 .weekly-player-grid > div.b {
   border-color: rgba(255, 111, 125, 0.22);
   background: rgba(255, 111, 125, 0.04);
+}
+
+.report-player-note-groups {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.report-player-note-group {
+  display: grid;
+  gap: 8px;
+}
+
+.report-player-note-group > span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 950;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.report-player-note-group > div {
+  display: grid;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.report-player-note-group.a > div {
+  border-color: rgba(84, 168, 255, 0.2);
+}
+
+.report-player-note-group.b > div {
+  border-color: rgba(255, 111, 125, 0.2);
+}
+
+.report-player-note-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.report-player-note-row + .report-player-note-row {
+  border-top: 1px solid var(--line);
+}
+
+.report-player-note-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.report-player-note-title strong {
+  color: var(--text);
+  font-size: 0.96rem;
+}
+
+.report-player-note-title b {
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 950;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.report-player-note-row small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.report-player-note-row em {
+  min-width: 42px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-style: normal;
+  font-weight: 950;
+  text-align: center;
+}
+
+.report-player-note-row em.up {
+  border-color: rgba(128, 214, 79, 0.38);
+  color: #9ee06e;
+  background: rgba(128, 214, 79, 0.08);
+}
+
+.report-player-note-row em.down {
+  border-color: rgba(255, 111, 125, 0.34);
+  color: #ff9aa5;
+  background: rgba(255, 111, 125, 0.07);
 }
 
 .weekly-relationships-panel {
@@ -4841,6 +5188,10 @@ tr:last-child td {
   .weekly-note-grid,
   .weekly-change-grid,
   .weekly-player-grid,
+  .match-share-head,
+  .match-share-facts,
+  .match-share-two-col,
+  .match-share-lineups,
   .previous-meeting-topline,
   .report-lineup-grid,
     .rank-row,
