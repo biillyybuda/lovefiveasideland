@@ -498,6 +498,7 @@ function similarMatchesForOption(option: MatchdayOption | null, matches: Match[]
       const useSwappedOrientation = swapped > same;
       const orientedA = useSwappedOrientation ? rawHistB : rawHistA;
       const orientedB = useSwappedOrientation ? rawHistA : rawHistB;
+      const scoreLabel = score ? orientedScoreLabel(score, useSwappedOrientation) : match.score || "-";
       const orientedASet = new Set(orientedA.map(normalizeName));
       const orientedBSet = new Set(orientedB.map(normalizeName));
       const sameSide = Math.max(same, swapped);
@@ -510,6 +511,7 @@ function similarMatchesForOption(option: MatchdayOption | null, matches: Match[]
         swapped: useSwappedOrientation,
         margin: score ? Math.abs(score[0] - score[1]) : 0,
         goals: score ? score[0] + score[1] : 0,
+        scoreLabel,
         teamA: orientedA,
         teamB: orientedB,
         labelA: useSwappedOrientation ? "Old Team B" : "Old Team A",
@@ -533,6 +535,10 @@ function countOverlap(a: Set<string>, b: Set<string>) {
     if (b.has(item)) count += 1;
   }
   return count;
+}
+
+function orientedScoreLabel(score: [number, number], swapped: boolean) {
+  return swapped ? `${score[1]}-${score[0]}` : `${score[0]}-${score[1]}`;
 }
 
 function fmt(value: number, digits = 0) {
@@ -813,7 +819,7 @@ function MatchdayAnalysisCard({
                   </div>
                   <div>
                     <span>Score</span>
-                    <em>{row.match.score || "-"}</em>
+                    <em>{row.scoreLabel}</em>
                   </div>
                   <div>
                     <span>Same-team players</span>
@@ -1301,7 +1307,7 @@ export function InteractiveMatchday({
                           </div>
                           <div>
                             <span>Score</span>
-                            <em>{row.match.score || "-"}</em>
+                            <em>{row.scoreLabel}</em>
                           </div>
                           <div>
                             <span>Same-team players</span>

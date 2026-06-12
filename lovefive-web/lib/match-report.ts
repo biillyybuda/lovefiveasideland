@@ -965,22 +965,25 @@ function previousMeetingFor(match: Match, matches: Match[], nameMap: Map<string,
 
   const currentResult = scoreToResult(match);
   const previousResult = scoreToResult(closest.match);
-  const previousWinner = previousResult === "DRAW" ? "a draw" : previousResult === "A" ? "a Team A win" : "a Team B win";
+  const orientedPreviousResult = closest.swapped ? swapResult(previousResult) : previousResult;
+  const orientedScore = orientedScoreLabel(closest.match.score, closest.swapped);
+  const previousWinner =
+    orientedPreviousResult === "DRAW" ? "a draw" : orientedPreviousResult === "A" ? "a Team A win" : "a Team B win";
   const continuity = `${closest.sharedPlayers} ${closest.sharedPlayers === 1 ? "player was" : "players were"} back, ${closest.sameSidePlayers} on the same side`;
   const direction =
-    currentResult !== "DRAW" && previousResult !== "DRAW" && currentResult !== previousResult
+    currentResult !== "DRAW" && orientedPreviousResult !== "DRAW" && currentResult !== orientedPreviousResult
       ? "this was a reversal of the last similar meeting"
-      : currentResult === previousResult && currentResult !== "DRAW"
+      : currentResult === orientedPreviousResult && currentResult !== "DRAW"
         ? "the same side came out on top again"
         : "the comparison stays live";
   return {
     dateLabel: formatUkDate(closest.match.date),
-    scoreLabel: closest.match.score || "-",
-    resultLabel: previousResult === "DRAW" ? "Draw" : previousResult === "A" ? "Team A won" : "Team B won",
+    scoreLabel: orientedScore,
+    resultLabel: orientedPreviousResult === "DRAW" ? "Draw" : orientedPreviousResult === "A" ? "Team A won" : "Team B won",
     sharedPlayers: closest.sharedPlayers,
     sameSidePlayers: closest.sameSidePlayers,
     swapped: closest.swapped,
-    detail: `Closest recent comparator: ${closest.match.score || "-"} on ${formatUkDate(closest.match.date)}, ${previousWinner}. With ${continuity}, ${direction}.`,
+    detail: `Closest recent comparator: ${orientedScore} on ${formatUkDate(closest.match.date)}, ${previousWinner}. With ${continuity}, ${direction}.`,
     sides: [
       previousMeetingSide({
         historicTeam: closest.orientedA,
@@ -1545,6 +1548,16 @@ function average(values: number[]) {
 function numberOr(value: unknown, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function swapResult(result: "A" | "B" | "DRAW") {
+  return result === "A" ? "B" : result === "B" ? "A" : "DRAW";
+}
+
+function orientedScoreLabel(scoreValue: string | null | undefined, swapped: boolean) {
+  const score = scoreParts(scoreValue);
+  if (!score) return scoreValue || "-";
+  return swapped ? `${score[1]}-${score[0]}` : `${score[0]}-${score[1]}`;
 }
 
 function resultScoreLabel(match: Match, result: "A" | "B" | "DRAW") {

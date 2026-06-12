@@ -463,25 +463,55 @@ function teamStyleComponents(teamA: string[], teamB: string[], state: EngineStat
 function similarityPenaltyForTeams(teamA: string[], teamB: string[], state: EngineState) {
   const aNow = new Set(teamA);
   const bNow = new Set(teamB);
+  const allNow = new Set([...teamA, ...teamB]);
+  const totalPlayers = Math.max(teamA.length + teamB.length, 1);
+  const currentMmrDiff = Math.abs(average(teamA.map((name) => numberOr(state.mmrMap.get(name), STARTING_MMR))) - average(teamB.map((name) => numberOr(state.mmrMap.get(name), STARTING_MMR))));
   let penalty = 0;
 
   for (const match of state.matches) {
     const score = scoreParts(match.score);
     if (!score) continue;
-    const histA = new Set(splitTeam(match.team_a).map(normalizeName).filter(Boolean));
-    const histB = new Set(splitTeam(match.team_b).map(normalizeName).filter(Boolean));
+    const histATeam = splitTeam(match.team_a).map(normalizeName).filter(Boolean);
+    const histBTeam = splitTeam(match.team_b).map(normalizeName).filter(Boolean);
+    const histA = new Set(histATeam);
+    const histB = new Set(histBTeam);
+    const involved = new Set([...histA, ...histB]);
     const same = countOverlap(aNow, histA) + countOverlap(bNow, histB);
     const swapped = countOverlap(aNow, histB) + countOverlap(bNow, histA);
-    const similarity = Math.max(same, swapped) / Math.max(teamA.length + teamB.length, 1);
+    const sameSidePlayers = Math.max(same, swapped);
+    const similarity = sameSidePlayers / totalPlayers;
+    const totalOverlap = countOverlap(allNow, involved);
+    const overlapRatio = totalOverlap / totalPlayers;
     const goalDiff = Math.abs(score[0] - score[1]);
+
     if (similarity >= 0.75 && goalDiff >= 4) {
       const similarityLift = (similarity - 0.75) / 0.25;
       const marginLift = Math.min(2, 1 + (goalDiff - 4) * 0.18);
       penalty = Math.max(penalty, (2 + similarityLift * 6) * marginLift);
     }
+
+    if (similarity >= 0.6 && overlapRatio >= 0.8 && goalDiff >= 5) {
+      const sameSideLift = clamp((similarity - 0.6) / 0.4, 0, 1);
+      const overlapLift = clamp((overlapRatio - 0.8) / 0.2, 0, 1);
+      const marginLift = Math.min(2.2, 1 + (goalDiff - 5) * 0.16);
+      const historicalMmrDiff = historicalCurrentMmrDiff(histATeam, histBTeam, state);
+      const ratingCorrectionRelief =
+        historicalMmrDiff === null
+          ? 1
+          : clamp(1 - Math.max(0, historicalMmrDiff - currentMmrDiff) / 220, 0.68, 1);
+      const lineageRisk = (2.5 + sameSideLift * 4.5 + overlapLift * 2) * marginLift * ratingCorrectionRelief;
+      penalty = Math.max(penalty, lineageRisk);
+    }
   }
 
   return penalty;
+}
+
+function historicalCurrentMmrDiff(histA: string[], histB: string[], state: EngineState) {
+  const aValues = histA.map((name) => state.mmrMap.get(name)).filter((value): value is number => Number.isFinite(value));
+  const bValues = histB.map((name) => state.mmrMap.get(name)).filter((value): value is number => Number.isFinite(value));
+  if (aValues.length < 3 || bValues.length < 3) return null;
+  return Math.abs(average(aValues) - average(bValues));
 }
 
 function explainImprovement(before: Record<string, number | string | boolean | null>, after: Record<string, number | string | boolean | null>) {
