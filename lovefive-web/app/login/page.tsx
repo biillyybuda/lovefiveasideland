@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 export default function LoginPage() {
   return (
     <main className="main">
-      <Suspense fallback={<div className="panel">Loading sign in...</div>}>
+      <Suspense fallback={<div className="app-loading compact"><span>Love Five</span><strong>Opening account</strong></div>}>
         <LoginPanel />
       </Suspense>
     </main>

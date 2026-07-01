@@ -10,14 +10,14 @@ type AuthMode = "login" | "signup";
 export function LoginPanel() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [mode, setMode] = useState<AuthMode>("login");
+  const initialMode = searchParams.get("mode") === "signup" ? "signup" : "login";
+  const [mode, setMode] = useState<AuthMode>(initialMode);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const currentAppUrl = process.env.NEXT_PUBLIC_CURRENT_APP_URL || "https://lovefiveasideland.onrender.com";
   const nextPath = useMemo(() => {
     const raw = searchParams.get("next");
     return raw && raw.startsWith("/") ? raw : "/app";
@@ -49,7 +49,13 @@ export function LoginPanel() {
     const result =
       mode === "login"
         ? await supabase.auth.signInWithPassword({ email: cleanEmail, password })
-        : await supabase.auth.signUp({ email: cleanEmail, password });
+        : await supabase.auth.signUp({
+            email: cleanEmail,
+            password,
+            options: {
+              emailRedirectTo: `${window.location.origin}/app`
+            }
+          });
     setBusy(false);
 
     if (result.error) {
@@ -74,7 +80,9 @@ export function LoginPanel() {
           <div className="eyebrow">Account</div>
           <h1>{mode === "login" ? "Sign in to Love Five" : "Create your Love Five account"}</h1>
           <p className="lead">
-            Use the same Supabase account as the current app. Your linked leagues will load from the existing database.
+            {mode === "login"
+              ? "Open your league dashboard, manage matchday, and keep your group stats moving."
+              : "Create your account first. Next you can join a league with a code or create one for your group."}
           </p>
         </div>
 
@@ -107,15 +115,22 @@ export function LoginPanel() {
         </form>
 
         <div className="auth-actions">
-          <button className="button" type="button" onClick={() => setMode(mode === "login" ? "signup" : "login")}>
+          <button
+            className="button"
+            type="button"
+            onClick={() => {
+              setMessage("");
+              setMode(mode === "login" ? "signup" : "login");
+            }}
+          >
             {mode === "login" ? "Create an account" : "Sign in instead"}
           </button>
           <Link className="button" href="/demo">
-            View demo league
+            View demo
           </Link>
-          <a className="button" href={currentAppUrl}>
-            Open current app
-          </a>
+          <Link className="button" href="/">
+            Back to home
+          </Link>
         </div>
       </div>
     </div>

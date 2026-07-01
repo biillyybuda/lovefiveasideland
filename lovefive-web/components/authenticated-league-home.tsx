@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
+import { AccountLeagueOnboarding } from "@/components/account-league-onboarding";
 import { LiveAppShell } from "@/components/live-app-shell";
 import { MatchCard } from "@/components/match-card";
 import { Stat } from "@/components/stats";
@@ -47,7 +48,6 @@ export function AuthenticatedLeagueHome() {
 
   const selectedLeague = leagues.find((league) => league.id === leagueId) || null;
   const admin = isAdminRole(selectedLeague?.role);
-  const currentAppUrl = process.env.NEXT_PUBLIC_CURRENT_APP_URL || "https://lovefiveasideland.onrender.com";
 
   const bootstrap = useCallback(async (activeUser: User) => {
     const supabase = getBrowserSupabase();
@@ -214,17 +214,22 @@ export function AuthenticatedLeagueHome() {
   }
 
   if (state === "auth" || state === "loading") {
-    return <main className="main"><div className="panel"><p className="muted">Loading your league...</p></div></main>;
+    return (
+      <main className="main">
+        <div className="app-loading">
+          <div>
+            <span>Love Five</span>
+            <strong>Opening your league</strong>
+          </div>
+        </div>
+      </main>
+    );
   }
 
   if (state === "empty") {
     return (
       <main className="main">
-        <div className="panel">
-          <h1>No leagues linked yet</h1>
-          <p className="muted">You are signed in as {user?.email}, but this account has no active league membership.</p>
-          <a className="button primary" href={currentAppUrl}>Open current app</a>
-        </div>
+        <AccountLeagueOnboarding email={user?.email} />
       </main>
     );
   }
@@ -235,7 +240,8 @@ export function AuthenticatedLeagueHome() {
         <div className="panel">
           <h1>Could not load your league</h1>
           <p className="muted">{message}</p>
-          <a className="button" href={currentAppUrl}>Open current app</a>
+          <Link className="button primary" href="/app">Try again</Link>
+          <Link className="button" href="/login">Sign in again</Link>
         </div>
       </main>
     );

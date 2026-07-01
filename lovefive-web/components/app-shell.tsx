@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { BrandMark } from "@/components/brand-mark";
-import { ThemeToggle } from "@/components/theme-toggle";
 
 const nav = [
   { href: "/demo", label: "Home", key: "overview" },
@@ -49,7 +48,6 @@ export function AppShell({
             </Link>
           </nav>
           <div className="header-actions">
-            <ThemeToggle />
             <details className="profile-menu">
               <summary>
                 <span>Demo</span>

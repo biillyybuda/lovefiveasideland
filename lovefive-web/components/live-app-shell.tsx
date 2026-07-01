@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { BrandMark } from "@/components/brand-mark";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { getBrowserSupabase } from "@/lib/auth-client";
 import { clearSelectedLeague, isAdminRole, type LeagueOption } from "@/lib/live-data";
 
@@ -47,7 +46,6 @@ export function LiveAppShell({
             <span className="site-league-link">{league.name}</span>
           </nav>
           <div className="header-actions">
-            <ThemeToggle />
             <details className="profile-menu">
               <summary>
                 <span>{league.role || "member"}</span>
