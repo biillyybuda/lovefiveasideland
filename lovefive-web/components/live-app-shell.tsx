@@ -3,17 +3,22 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { BrandMark } from "@/components/brand-mark";
+import { SetupChecklist } from "@/components/setup-checklist";
 import { getBrowserSupabase } from "@/lib/auth-client";
 import { clearSelectedLeague, isAdminRole, type LeagueOption } from "@/lib/live-data";
 
 export function LiveAppShell({
   active,
   children,
-  league
+  league,
+  matchesCount = 0,
+  playersCount = 0
 }: {
   active: "overview" | "matchday" | "charts" | "season" | "info" | "admin" | "players" | "matches" | "join";
   children: React.ReactNode;
   league: LeagueOption;
+  matchesCount?: number;
+  playersCount?: number;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -68,6 +73,13 @@ export function LiveAppShell({
         </div>
       </header>
       <main className={pathname?.startsWith("/app/matchday") ? "main matchday-main" : "main"}>
+        <SetupChecklist
+          currentPath={pathname || "/app"}
+          enabled={admin && playersCount === 0 && matchesCount === 0}
+          leagueId={league.id}
+          matchesCount={matchesCount}
+          playersCount={playersCount}
+        />
         {children}
       </main>
     </div>

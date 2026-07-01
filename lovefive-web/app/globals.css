@@ -1742,6 +1742,124 @@ tbody tr:hover {
   font-size: 1.18rem;
 }
 
+.setup-checklist {
+  position: sticky;
+  top: 76px;
+  z-index: 24;
+  max-width: 940px;
+  margin: 0 auto 12px;
+  border: 1px solid rgba(145, 217, 79, 0.28);
+  border-radius: 8px;
+  background:
+    linear-gradient(120deg, rgba(145, 217, 79, 0.1), transparent 48%),
+    rgba(12, 16, 19, 0.96);
+  box-shadow: 0 16px 54px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(14px);
+}
+
+.setup-checklist-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  min-height: 54px;
+  border: 0;
+  padding: 0 14px;
+  color: var(--text);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.setup-checklist-toggle span {
+  color: var(--green);
+  font-size: 0.76rem;
+  font-weight: 950;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.setup-checklist-toggle strong {
+  overflow: hidden;
+  font-size: 1.05rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setup-checklist-toggle small {
+  color: var(--muted);
+  font-weight: 850;
+}
+
+.setup-checklist-body {
+  display: grid;
+  gap: 12px;
+  padding: 0 14px 14px;
+}
+
+.setup-checklist-body p {
+  margin: 0;
+  color: #b7c4cf;
+  line-height: 1.5;
+}
+
+.setup-checklist-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.setup-step {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  min-height: 52px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.setup-step span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: #dce7ef;
+  font-size: 0.82rem;
+  font-weight: 950;
+}
+
+.setup-step strong {
+  font-size: 0.95rem;
+  line-height: 1.15;
+}
+
+.setup-step.active {
+  border-color: rgba(84, 168, 255, 0.42);
+  background: rgba(84, 168, 255, 0.1);
+}
+
+.setup-step.done {
+  border-color: rgba(145, 217, 79, 0.32);
+  background: rgba(145, 217, 79, 0.1);
+}
+
+.setup-step.done span {
+  border-color: rgba(145, 217, 79, 0.42);
+  color: #eaffd6;
+  background: rgba(145, 217, 79, 0.16);
+}
+
+.setup-checklist-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .compact-result-list,
 .mini-leaderboard {
   display: grid;
@@ -4803,6 +4921,14 @@ tr:last-child td {
     grid-template-columns: 1fr;
   }
 
+  .setup-checklist {
+    top: 64px;
+  }
+
+  .setup-checklist-steps {
+    grid-template-columns: 1fr;
+  }
+
   .landing-feature-grid,
   .onboarding-choice-grid,
   .season-scoreboard,
@@ -4993,6 +5119,24 @@ tr:last-child td {
   .button-row,
   .selection-actions {
     display: grid;
+  }
+
+  .setup-checklist {
+    position: static;
+    margin-bottom: 10px;
+  }
+
+  .setup-checklist-toggle {
+    grid-template-columns: 1fr auto;
+    min-height: 50px;
+  }
+
+  .setup-checklist-toggle span {
+    grid-column: 1 / -1;
+  }
+
+  .setup-checklist-toggle strong {
+    white-space: normal;
   }
 
   .sticky-panel {

@@ -107,7 +107,7 @@ export function LiveLeagueLoader({
   if (state === "error" || !league) return <main className="main"><div className="panel"><h1>Could not load page</h1><p className="muted">{message}</p></div></main>;
   if (requireAdmin && !["admin", "owner"].includes(String(league.role || "").toLowerCase())) {
     return (
-      <LiveAppShell active="overview" league={league}>
+      <LiveAppShell active="overview" league={league} matchesCount={matches.length} playersCount={players.length}>
         <div className="panel">
           <h1>Admin only</h1>
           <p className="muted">Only league admins can use this page.</p>
@@ -117,7 +117,7 @@ export function LiveLeagueLoader({
   }
 
   return (
-    <LiveAppShell active={active} league={league}>
+    <LiveAppShell active={active} league={league} matchesCount={matches.length} playersCount={players.length}>
       {children({ league, players, matches, mmrHistory, refresh })}
     </LiveAppShell>
   );

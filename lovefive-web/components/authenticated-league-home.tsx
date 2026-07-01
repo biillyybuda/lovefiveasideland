@@ -248,7 +248,7 @@ export function AuthenticatedLeagueHome() {
   }
 
   return (
-    <LiveAppShell active="overview" league={selectedLeague}>
+    <LiveAppShell active="overview" league={selectedLeague} matchesCount={matches.length} playersCount={players.length}>
       <StatsTicker items={tickerItems} />
 
       <div className="home-hero">
