@@ -101,7 +101,7 @@ BEGIN
 
   INSERT INTO public.league_members (league_id, user_id, role, status)
   VALUES (created_league.id, active_user, 'admin', 'active')
-  ON CONFLICT (league_id, user_id)
+  ON CONFLICT ON CONSTRAINT league_members_pkey
   DO UPDATE SET role = 'admin', status = 'active';
 
   league_id := created_league.id;
@@ -144,7 +144,7 @@ BEGIN
 
   INSERT INTO public.league_members (league_id, user_id, role, status)
   VALUES (matched_league.id, active_user, 'member', 'active')
-  ON CONFLICT (league_id, user_id)
+  ON CONFLICT ON CONSTRAINT league_members_pkey
   DO UPDATE SET status = 'active';
 
   league_id := matched_league.id;
