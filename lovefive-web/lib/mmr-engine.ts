@@ -1,4 +1,4 @@
-import { type Match, type MmrHistory, type Player, type PlayerSummary } from "./demo-data";
+import { scoreParts, type Match, type MmrHistory, type Player, type PlayerSummary } from "./demo-data";
 
 export const STARTING_MMR = 1000;
 export const DEFAULT_K_FACTOR = 30;
@@ -45,21 +45,19 @@ export function volatilityFactor(playerMmr: number, leagueMean: number) {
 }
 
 export function scoreToResult(match: Pick<Match, "score" | "result">): "A" | "B" | "DRAW" {
-  const parsed = String(match.score || "")
-    .replace(":", "-")
-    .split("-")
-    .map((part) => Number(part.trim()));
-
-  if (parsed.length === 2 && parsed.every((part) => !Number.isNaN(part))) {
+  const parsed = scoreParts(match.score);
+  if (parsed) {
     if (parsed[0] > parsed[1]) return "A";
     if (parsed[1] > parsed[0]) return "B";
     return "DRAW";
   }
 
+  if (String(match.score || "").trim()) throw new Error("Enter a complete score, such as 10-8.");
   const raw = String(match.result || "").trim().toUpperCase();
   if (raw === "A") return "A";
   if (raw === "B") return "B";
-  return "DRAW";
+  if (raw === "DRAW") return "DRAW";
+  throw new Error("A completed match needs a score or result.");
 }
 
 export function calculateMatchMmrUpdates({

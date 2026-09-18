@@ -12,6 +12,10 @@ import {
   type Player
 } from "@/lib/demo-data";
 import { bestBalancedSplit, findBestTweaks, type TeamOption } from "@/lib/team-ai-engine";
+import { BalanceComparison } from "@/components/balance-comparison";
+import { BalancedMatchday } from "@/components/balanced-matchday";
+import { LineupEditor } from "@/components/lineup-editor";
+import type { LineupSeed } from "@/lib/lineup-editor";
 
 type MatchdayOption = TeamOption & { rank?: number };
 type SmartOption = {
@@ -58,51 +62,113 @@ function splitKey(option: MatchdayOption) {
   return [a, b].sort().join("::");
 }
 
+function breakdownNumber(option: MatchdayOption, key: string, fallback = 0) {
+  const value = Number(option.breakdown[key]);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function hasShortlistRisk(option: MatchdayOption) {
+  const rotationPenalty = breakdownNumber(option, "rotating_keeper_penalty");
+  const stylePenalty = breakdownNumber(option, "style_net");
+  return (
+    option.similarityPenalty >= 7
+    || option.badPairTotal >= 9
+    || rotationPenalty >= 9
+    || stylePenalty >= 3.5
+    || option.diff >= 45
+    || option.ranking.predictedMargin >= 6.5
+  );
+}
+
+function keeperRotationScore(option: MatchdayOption) {
+  return (
+    breakdownNumber(option, "rotating_keeper_penalty")
+    + breakdownNumber(option, "rotation_floor_gap") / 12
+    + option.ranking.predictedMargin / 8
+  );
+}
+
+function profileBalanceScore(option: MatchdayOption) {
+  if (!option.breakdown.style_enabled) return Number.POSITIVE_INFINITY;
+  return breakdownNumber(option, "style_net") + option.ranking.predictedMargin / 10;
+}
+
 function buildSmartOptions(options: MatchdayOption[]) {
   const picked: SmartOption[] = [];
   const seen = new Set<string>();
+  const maxShortlistRank = Math.max(24, Math.ceil(options.length * 0.5));
+  const isShortlistSafe = (option: MatchdayOption, index: number) => index < maxShortlistRank && !hasShortlistRisk(option);
 
-  function add(label: string, index: number) {
+  function add(label: string, index: number, allowRisk = false) {
     const option = options[index];
     if (!option) return;
+    if (!allowRisk && !isShortlistSafe(option, index)) return;
     const key = splitKey(option);
     if (seen.has(key)) return;
     picked.push({ option, label, index });
     seen.add(key);
   }
 
-  add("Best overall", 0);
-  add("Closest expected game", bestIndex(options, (option) => option.ranking.predictedMargin, "asc"));
-  add("Most even ratings", bestIndex(options, (option) => option.diff, "asc"));
-  add("Highest chemistry balance", bestIndex(options, (option) => option.chemistryGap, "asc"));
+  const bestOverall = bestIndex(options, (option) => option.ranking.recommendationScore, "desc", isShortlistSafe);
+  add("Best overall", bestOverall >= 0 ? bestOverall : 0, bestOverall < 0);
+  add("Closest expected game", bestIndex(options, (option) => option.ranking.predictedMargin, "asc", isShortlistSafe));
+  add("Best profile balance", bestIndex(
+    options,
+    profileBalanceScore,
+    "asc",
+    (option, index) => isShortlistSafe(option, index) && Boolean(option.breakdown.style_enabled)
+  ));
+  add("Best keeper rotation", bestIndex(options, keeperRotationScore, "asc", isShortlistSafe));
+  add("Most even ratings", bestIndex(options, (option) => option.diff, "asc", isShortlistSafe));
+  add("Highest chemistry balance", bestIndex(options, (option) => option.chemistryGap, "asc", isShortlistSafe));
 
-  for (let index = 0; picked.length < 3 && index < options.length; index += 1) {
+  for (let index = 0; picked.length < 4 && index < options.length; index += 1) {
     add("Strong alternative", index);
   }
 
-  return picked.slice(0, 3);
+  if (!picked.length) add("Best available", 0, true);
+
+  return picked.slice(0, 4);
 }
 
-function bestIndex(options: MatchdayOption[], getter: (option: MatchdayOption) => number, direction: "asc" | "desc") {
+function bestIndex(
+  options: MatchdayOption[],
+  getter: (option: MatchdayOption) => number,
+  direction: "asc" | "desc",
+  predicate: (option: MatchdayOption, index: number) => boolean = () => true
+) {
   if (!options.length) return -1;
   return options.reduce((best, option, index) => {
+    if (!predicate(option, index)) return best;
+    if (best < 0) return index;
     const current = getter(option);
     const previous = getter(options[best]);
     return direction === "asc" ? current < previous ? index : best : current > previous ? index : best;
-  }, 0);
+  }, -1);
 }
 
 function optionExplanation(option: MatchdayOption) {
   const positives: string[] = [];
   const risks: string[] = [];
   const closePct = option.ranking.closePct;
+  const rotationPenalty = breakdownNumber(option, "rotating_keeper_penalty");
+  const styleNet = breakdownNumber(option, "style_net");
+  const hasProfiles = Boolean(option.breakdown.style_enabled);
 
   if (option.diff <= 10) positives.push("Ratings are extremely tight, so the game should not need one side to overperform.");
   else if (option.diff <= 25) positives.push("MMR balance is healthy enough for a competitive game.");
   else risks.push("The MMR gap is noticeable, so one team may start with a small edge.");
 
-  if (closePct >= 70) positives.push("The model expects a close game rather than a runaway result.");
-  else if (closePct < 45) risks.push("The close-game chance is lower than ideal.");
+  if (closePct >= 70) positives.push("The balance rules give this matchup a strong closeness score.");
+  else if (closePct < 45) risks.push("The closeness score is lower than ideal.");
+
+  const saveRotationPenalty = breakdownNumber(option, "rotation_save_penalty");
+  if (rotationPenalty <= 3) positives.push("Rotating-keeper burden is shared evenly when everyone takes a turn.");
+  else if (rotationPenalty >= 7) risks.push("One team has a weaker floor during keeper rotations.");
+  if (saveRotationPenalty >= 1.2) risks.push("Save-impact history gives one team a stronger rotating-keeper floor.");
+
+  if (hasProfiles && styleNet <= 1.1) positives.push("Goal, assist and save profiles are balanced across the two teams.");
+  else if (hasProfiles && styleNet >= 2.5) risks.push("One side has the stronger rate-based goal, assist and save profile mix.");
 
   if (option.chemistryGap <= 4) positives.push("Proven chemistry is spread fairly evenly once expectation is accounted for.");
   else risks.push("One side has the stronger expected-vs-actual chemistry edge.");
@@ -127,16 +193,21 @@ function recommendationDetails(option: MatchdayOption, label: string, options: M
   const bestMmrGap = Math.min(...options.map((row) => row.diff));
   const bestChemGap = Math.min(...options.map((row) => row.chemistryGap));
   const bestRepeatRisk = Math.min(...options.map((row) => row.similarityPenalty));
+  const bestKeeperRotation = Math.min(...options.map((row) => breakdownNumber(row, "rotating_keeper_penalty")));
+  const profileOptions = options.filter((row) => Boolean(row.breakdown.style_enabled));
+  const bestProfileBalance = profileOptions.length ? Math.min(...profileOptions.map((row) => breakdownNumber(row, "style_net"))) : null;
   const chips: string[] = [];
 
   if (option.ranking.recommendationScore >= bestScore - tolerance) chips.push("Best combined score");
-  if (option.ranking.closePct >= bestClose - tolerance) chips.push("Highest tight-game chance");
+  if (option.ranking.closePct >= bestClose - tolerance) chips.push("Highest closeness score");
   if (option.ranking.predictedMargin <= bestMargin + tolerance) chips.push("Lowest expected margin");
   if (option.diff <= bestMmrGap + tolerance) chips.push("Most even ratings");
   if (option.chemistryGap <= bestChemGap + tolerance) chips.push("Best chemistry balance");
   if (option.similarityPenalty <= bestRepeatRisk + tolerance) chips.push("Lowest repeat risk");
+  if (breakdownNumber(option, "rotating_keeper_penalty") <= bestKeeperRotation + tolerance) chips.push("Best keeper rotation");
+  if (bestProfileBalance !== null && Boolean(option.breakdown.style_enabled) && breakdownNumber(option, "style_net") <= bestProfileBalance + tolerance) chips.push("Best profile balance");
 
-  const uniqueChips = [...new Set(chips)].slice(0, 3);
+  const uniqueChips = [...new Set(chips)].slice(0, 4);
 
   if (label === "Most even ratings") {
     return {
@@ -154,14 +225,28 @@ function recommendationDetails(option: MatchdayOption, label: string, options: M
 
   if (label === "Closest expected game") {
     return {
-      chips: uniqueChips.length ? uniqueChips : ["Lowest expected margin", `${fmt(option.ranking.closePct)}% tight-game chance`],
+      chips: uniqueChips.length ? uniqueChips : ["Lowest expected margin", `${fmt(option.ranking.closePct)}/100 closeness score`],
       summary: "The model expects this one to stay closest on the scoreboard."
     };
   }
 
+  if (label === "Best profile balance") {
+    return {
+      chips: uniqueChips.length ? uniqueChips : ["Best profile balance", `${fmt(breakdownNumber(option, "style_net"), 1)} profile mix`],
+      summary: "Best spread of per-game goal, assist, save and clutch profiles across the two teams."
+    };
+  }
+
+  if (label === "Best keeper rotation") {
+    return {
+      chips: uniqueChips.length ? uniqueChips : ["Best keeper rotation", `${fmt(breakdownNumber(option, "rotating_keeper_penalty"), 1)} rotation risk`],
+      summary: "Best at sharing the rotating-keeper burden across rating floor, experience and save-impact profiles."
+    };
+  }
+
   return {
-    chips: uniqueChips.length ? uniqueChips : ["Best overall model score", `${fmt(option.ranking.closePct)}% tight-game chance`],
-    summary: "The best all-round blend of rating balance, projected margin, proven chemistry and repeat-risk checks."
+    chips: uniqueChips.length ? uniqueChips : ["Best overall model score", `${fmt(option.ranking.closePct)}/100 closeness score`],
+    summary: "The best all-round blend of rating balance, projected margin, player profiles, proven chemistry, keeper rotation and repeat-risk checks."
   };
 }
 
@@ -629,12 +714,466 @@ function TeamLinkRow({
   );
 }
 
+type ProfileKey = "finishing" | "creation" | "saveImpact" | "clutch" | "impact";
+
+const PROFILE_SPECIALIST_FLOOR = 0.7;
+const PROFILE_SECONDARY_FLOOR = 0.72;
+const PROFILE_SECONDARY_MAX_GAP = 0.14;
+type ProfileRoleKey = "finisher" | "creator" | "save";
+
+function profileValue(player: Player, key: ProfileKey) {
+  return Number(player.style_profile?.[key] || 0);
+}
+
+function profileRoleTraits(player: Player): Array<{ key: ProfileRoleKey; label: string; value: number }> {
+  const profile = player.style_profile;
+  if (!profile) return [];
+  const traits = [
+    { key: "finisher" as const, label: "🎯 Finisher", value: Number(profile.finishing || 0) },
+    { key: "creator" as const, label: "⚙️ Creator", value: Number(profile.creation || 0) },
+    { key: "save" as const, label: "🧤 Save impact", value: Number(profile.saveImpact || 0) }
+  ].sort((a, b) => b.value - a.value);
+  const [first, second] = traits;
+  if (!first || first.value < PROFILE_SPECIALIST_FLOOR) return [];
+  if (second && second.value >= PROFILE_SECONDARY_FLOOR && first.value - second.value <= PROFILE_SECONDARY_MAX_GAP) {
+    return [first, second];
+  }
+  return [first];
+}
+
+function isProfileCreator(player: Player) {
+  return profileRoleTraits(player).some((trait) => trait.key === "creator");
+}
+
+function isProfileFinisher(player: Player) {
+  return profileRoleTraits(player).some((trait) => trait.key === "finisher");
+}
+
+function teamProfileSummary(team: Player[]) {
+  const profiled = team.filter((player) => player.style_profile);
+  return {
+    count: profiled.length,
+    finishing: average(profiled.map((player) => profileValue(player, "finishing"))),
+    creation: average(profiled.map((player) => profileValue(player, "creation"))),
+    saveImpact: average(profiled.map((player) => profileValue(player, "saveImpact"))),
+    clutch: average(profiled.map((player) => profileValue(player, "clutch"))),
+    impact: average(profiled.map((player) => profileValue(player, "impact"))),
+    goals: profiled.reduce((sum, player) => sum + Number(player.style_profile?.historicGoals || 0), 0),
+    assists: profiled.reduce((sum, player) => sum + Number(player.style_profile?.historicAssists || 0), 0),
+    saves: profiled.reduce((sum, player) => sum + Number(player.style_profile?.saveMoments || 0), 0),
+    goalRate: profiled.reduce((sum, player) => sum + Number(player.style_profile?.goalsPerGame || 0), 0),
+    assistRate: profiled.reduce((sum, player) => sum + Number(player.style_profile?.assistsPerGame || 0), 0),
+    saveRate: profiled.reduce((sum, player) => sum + Number(player.style_profile?.saveMomentsPerGame || 0), 0),
+    avgGames: average(profiled.map((player) => Number(player.style_profile?.historicMatches || 0))),
+    specials: profiled.reduce((sum, player) => sum + Number(player.style_profile?.specialMoments || 0), 0),
+    creators: profiled.filter(isProfileCreator).length,
+    finishers: profiled.filter(isProfileFinisher).length
+  };
+}
+
+function playerProfileRole(player: Player) {
+  const profile = player.style_profile;
+  if (!profile) return "No profile";
+  const bestValue = Math.max(
+    Number(profile.finishing || 0),
+    Number(profile.creation || 0),
+    Number(profile.saveImpact || 0),
+    Number(profile.clutch || 0)
+  );
+  if (bestValue < 0.25) return "🃏 Wildcard profile";
+  const roleTraits = profileRoleTraits(player);
+  if (!roleTraits.length) return "🤝 Locker Room Leader";
+  return roleTraits.map((trait) => trait.label).join(" / ");
+}
+
+function profileScoreLabel(score: number) {
+  if (score <= 0.75) return "Elite balance";
+  if (score <= 1.6) return "Playable balance";
+  if (score <= 2.6) return "Watch the roles";
+  return "Profile warning";
+}
+
+function profileScoreTone(score: number) {
+  if (score <= 0.75) return "good";
+  if (score <= 1.6) return "steady";
+  return "alert";
+}
+
+function profileMetricWidth(value: number) {
+  return `${Math.max(6, Math.min(100, Number(value || 0) * 100))}%`;
+}
+
+function profilePlayerTraits(player: Player) {
+  const profile = player.style_profile;
+  if (!profile) return [];
+  return [
+    { label: "F", title: "Finishing", value: Number(profile.finishing || 0), className: "finish" },
+    { label: "C", title: "Creation", value: Number(profile.creation || 0), className: "create" },
+    { label: "S", title: "Save impact", value: Number(profile.saveImpact || 0), className: "save" }
+  ];
+}
+
+function profileRateLine(goalsPerGame: number, assistsPerGame: number, savesPerGame: number) {
+  return `${fmt(goalsPerGame, 1)}G ${fmt(assistsPerGame, 1)}A ${fmt(savesPerGame, 1)}S/game`;
+}
+
+function profileCompactRateLine(goalsPerGame: number, assistsPerGame: number, savesPerGame: number) {
+  return `${fmt(goalsPerGame, 1)}G ${fmt(assistsPerGame, 1)}A ${fmt(savesPerGame, 1)}S/g`;
+}
+
+function profileSampleLine(avgGames: number) {
+  return `${fmt(avgGames, 1)} avg profile games/player`;
+}
+
+function plural(count: number, singular: string) {
+  return `${count} ${singular}${count === 1 ? "" : "s"}`;
+}
+
+function profileDebugReasons(
+  option: MatchdayOption,
+  summaryA: ReturnType<typeof teamProfileSummary>,
+  summaryB: ReturnType<typeof teamProfileSummary>,
+  profileRows: Array<{ label: string; a: number; b: number; gap: number; weight: number }>,
+  allOptions?: MatchdayOption[]
+) {
+  const reasons: string[] = [];
+  const styleNet = breakdownNumber(option, "style_net");
+  const bestProfile = allOptions?.filter((row) => Boolean(row.breakdown.style_enabled)).sort((a, b) => breakdownNumber(a, "style_net") - breakdownNumber(b, "style_net"))[0];
+  const profileGap = bestProfile ? styleNet - breakdownNumber(bestProfile, "style_net") : 0;
+  const shortagePenalty = breakdownNumber(option, "style_finisher_shortage") + breakdownNumber(option, "style_creator_shortage");
+  const topGapRow = [...profileRows].sort((a, b) => b.gap - a.gap)[0];
+
+  if (styleNet <= 0.75) {
+    const bestText = bestProfile ? `only ${fmt(profileGap, 1)} away from the best profile-only split` : "already inside the safest profile range";
+    reasons.push(`Profile mix is clean: ${fmt(styleNet, 1)} is ${bestText}, so the profiles support this split rather than arguing for a different team.`);
+  } else if (styleNet <= 1.6) {
+    reasons.push(`Profile mix is playable: ${fmt(styleNet, 1)} leaves a small role-shape gap, but not enough to override MMR, margin and repeat-risk checks.`);
+  } else {
+    reasons.push(`Profile mix needs a look: ${fmt(styleNet, 1)} means one side owns more of the rate-based role profile than ideal.`);
+  }
+
+  const coverageText = `Specialist cover is A ${plural(summaryA.finishers, "finisher")}/${plural(summaryA.creators, "creator")} and B ${plural(summaryB.finishers, "finisher")}/${plural(summaryB.creators, "creator")}`;
+  if (shortagePenalty <= 0) {
+    reasons.push(`${coverageText}. No finisher-or-creator shortage penalty is being added.`);
+  } else {
+    reasons.push(`${coverageText}. The score adds ${fmt(shortagePenalty, 1)} because one side is light on a key specialist role.`);
+  }
+
+  if (topGapRow && topGapRow.gap >= 0.12) {
+    const leader = topGapRow.a >= topGapRow.b ? "Team A" : "Team B";
+    const leaderValue = topGapRow.a >= topGapRow.b ? topGapRow.a : topGapRow.b;
+    const trailerValue = topGapRow.a >= topGapRow.b ? topGapRow.b : topGapRow.a;
+    if (topGapRow.label === "Save impact") {
+      reasons.push(`Biggest swing is save impact: ${leader} leads ${fmt(leaderValue, 2)} to ${fmt(trailerValue, 2)} on the 0-1 rate score, but its x${topGapRow.weight} weight is low because keeper rotation handles most save-risk separately.`);
+    } else {
+      reasons.push(`Biggest swing is ${topGapRow.label.toLowerCase()}: ${leader} leads ${fmt(leaderValue, 2)} to ${fmt(trailerValue, 2)} on the 0-1 rate score, and its x${topGapRow.weight} weight controls how much that matters.`);
+    }
+  } else {
+    reasons.push("No single profile lane is pulling the teams badly apart; the balance is coming from the whole profile mix.");
+  }
+
+  return reasons.slice(0, 3);
+}
+
+function profileShareLabel(score: number) {
+  if (score <= 0.75) return "Clean split";
+  if (score <= 1.6) return "Pretty fair";
+  if (score <= 2.6) return "Role lean";
+  return "Check the roles";
+}
+
+function profileTeamEdge(
+  summary: ReturnType<typeof teamProfileSummary>,
+  opponent: ReturnType<typeof teamProfileSummary>
+) {
+  const edges = [
+    { label: "Finishing", value: summary.finishing - opponent.finishing },
+    { label: "Creation", value: summary.creation - opponent.creation },
+    { label: "Save cover", value: summary.saveImpact - opponent.saveImpact }
+  ].sort((a, b) => b.value - a.value);
+  const best = edges[0];
+  if (!best || best.value < 0.04) return { label: "No clear edge", note: "Roles are close" };
+  return { label: best.label, note: `+${fmt(best.value, 2)} role edge` };
+}
+
+function profileSwingLabel(row: { label: string; a: number; b: number; gap: number; weight: number } | undefined) {
+  if (!row) return { label: "No big swing", note: "Role balance is tight" };
+  const leader = row.a >= row.b ? "Team A" : "Team B";
+  const label = row.label === "Save impact" ? "save cover" : row.label.toLowerCase();
+  const note = row.label === "Save impact"
+    ? "Useful, but keeper rotation softens it"
+    : `${fmt(row.gap, 2)} gap in the role mix`;
+  return { label: `${leader} ${label}`, note };
+}
+
+function profileShareNudge(
+  label: "Team A" | "Team B",
+  summary: ReturnType<typeof teamProfileSummary>,
+  opponent: ReturnType<typeof teamProfileSummary>
+) {
+  if (summary.saveImpact - opponent.saveImpact >= 0.08) return `${label} has stronger save cover`;
+  if (summary.creators > opponent.creators) return `${label} has more creators`;
+  if (summary.finishers > opponent.finishers) return `${label} has more finishers`;
+  const edge = profileTeamEdge(summary, opponent);
+  if (edge.label === "No clear edge") return "";
+  return `${label} has stronger ${edge.label.toLowerCase()}`;
+}
+
+function profileShareRead(
+  styleNet: number,
+  shortagePenalty: number,
+  summaryA: ReturnType<typeof teamProfileSummary>,
+  summaryB: ReturnType<typeof teamProfileSummary>
+) {
+  const balance = styleNet <= 1.6 ? "Pretty even split." : "There is a role lean.";
+  const nudges = [
+    profileShareNudge("Team A", summaryA, summaryB),
+    profileShareNudge("Team B", summaryB, summaryA)
+  ].filter(Boolean);
+  const middle = nudges.length ? nudges.join(", ") + "." : "Roles are close across both sides.";
+  const flags = shortagePenalty <= 0 ? "No obvious role red flags." : "One side is light on a main finisher or creator.";
+  return `${balance} ${middle} ${flags}`;
+}
+
+function ProfileDebugSection({
+  option,
+  allOptions
+}: {
+  option: MatchdayOption;
+  allOptions?: MatchdayOption[];
+}) {
+  const [showProfileDetails, setShowProfileDetails] = useState(false);
+  const summaryA = teamProfileSummary(option.teamA);
+  const summaryB = teamProfileSummary(option.teamB);
+  const profileRows = [
+    { label: "Finishing", a: summaryA.finishing, b: summaryB.finishing, gap: breakdownNumber(option, "style_finishing_diff"), weight: 1.65 },
+    { label: "Creation", a: summaryA.creation, b: summaryB.creation, gap: breakdownNumber(option, "style_creation_diff"), weight: 1.65 },
+    { label: "Save impact", a: summaryA.saveImpact, b: summaryB.saveImpact, gap: breakdownNumber(option, "style_save_diff"), weight: 0.35 },
+    { label: "Clutch", a: summaryA.clutch, b: summaryB.clutch, gap: breakdownNumber(option, "style_clutch_diff"), weight: 0.6 },
+    { label: "Overall impact", a: summaryA.impact, b: summaryB.impact, gap: breakdownNumber(option, "style_impact_diff"), weight: 1.1 }
+  ];
+  const bestProfile = allOptions?.filter((row) => Boolean(row.breakdown.style_enabled)).sort((a, b) => breakdownNumber(a, "style_net") - breakdownNumber(b, "style_net"))[0] || null;
+  const enabled = Boolean(option.breakdown.style_enabled);
+  const loadedProfiles = summaryA.count + summaryB.count;
+  const totalPlayers = option.teamA.length + option.teamB.length;
+  const styleNet = breakdownNumber(option, "style_net");
+  const shareProfileRows = profileRows.filter((row) => row.label !== "Clutch");
+  const topGapRow = [...shareProfileRows].sort((a, b) => b.gap - a.gap)[0];
+  const detailTopGapRow = [...profileRows].sort((a, b) => b.gap - a.gap)[0];
+  const shortagePenalty = breakdownNumber(option, "style_finisher_shortage") + breakdownNumber(option, "style_creator_shortage");
+  const bestProfileScore = bestProfile ? breakdownNumber(bestProfile, "style_net") : null;
+  const profileTone = profileScoreTone(styleNet);
+  const teamAEdge = profileTeamEdge(summaryA, summaryB);
+  const teamBEdge = profileTeamEdge(summaryB, summaryA);
+  const swing = profileSwingLabel(topGapRow);
+  const teamColumns = [
+    { label: "Team A", team: option.teamA, summary: summaryA, className: "a" },
+    { label: "Team B", team: option.teamB, summary: summaryB, className: "b" }
+  ];
+  const profileExplainers = [
+    {
+      title: "F / C / S",
+      copy: "Relative 0-1 scores from per-game finishing, creation and save-impact rates. 1.00 means best in this group."
+    },
+    {
+      title: "Role badge",
+      copy: "A badge only appears when a player clears the specialist line. Otherwise they can show as Locker Room Leader or Wildcard."
+    },
+    {
+      title: "G/A/S rate",
+      copy: "Goals, assists and tagged save moments per game, so longer histories do not automatically look stronger."
+    },
+    {
+      title: "Sample",
+      copy: "Games are used as confidence only. Small samples are softened so one hot night does not dominate the role badge."
+    },
+    {
+      title: "Gap | weight",
+      copy: "Gap is the team average difference. Weight is how much that lane affects the profile-mix score."
+    }
+  ];
+
+  return (
+    <section className={`profile-debug-panel ${profileTone}`}>
+      <div className="profile-hero-strip">
+        <div>
+          <div className="profile-hero-title-row">
+            <span className="stat-label">Group chat read</span>
+            {enabled ? (
+              <button
+                aria-pressed={showProfileDetails}
+                className="ghost-button profile-mode-toggle"
+                onClick={() => setShowProfileDetails((value) => !value)}
+                type="button"
+              >
+                {showProfileDetails ? "Share view" : "Deep dive"}
+              </button>
+            ) : null}
+          </div>
+          <h3>Profile vibe check</h3>
+          <p>
+            {enabled
+              ? `${loadedProfiles}/${totalPlayers} profiles loaded. Rates are per game, not lifetime totals.`
+              : "Profile data is unavailable for this split."}
+          </p>
+        </div>
+        <div className="profile-score-lockup">
+          <span>Profile mix</span>
+          <strong>{enabled ? fmt(styleNet, 1) : "Off"}</strong>
+          <small>{enabled ? profileScoreLabel(styleNet) : "MMR fallback"}</small>
+        </div>
+      </div>
+
+      <div className="profile-share-summary">
+        <div>
+          <span>Verdict</span>
+          <strong>{profileShareLabel(styleNet)}</strong>
+          <small>{fmt(styleNet, 1)} profile mix</small>
+        </div>
+        <div>
+          <span>Team A edge</span>
+          <strong>{teamAEdge.label}</strong>
+          <small>{teamAEdge.note}</small>
+        </div>
+        <div>
+          <span>Team B edge</span>
+          <strong>{teamBEdge.label}</strong>
+          <small>{teamBEdge.note}</small>
+        </div>
+        <div>
+          <span>Main swing</span>
+          <strong>{swing.label}</strong>
+          <small>{swing.note}</small>
+        </div>
+      </div>
+
+      {enabled ? (
+        <>
+          <p className="profile-share-read">{profileShareRead(styleNet, shortagePenalty, summaryA, summaryB)}</p>
+
+          {showProfileDetails ? (
+            <>
+              <div className="profile-debug-summary">
+                <div>
+                  <span>Loaded profiles</span>
+                  <strong>{loadedProfiles}/{totalPlayers}</strong>
+                  <small>{bestProfileScore !== null ? `${fmt(bestProfileScore, 1)} best mix available` : "No comparison split"}</small>
+                </div>
+                <div>
+                  <span>Team A rates</span>
+                  <strong>{profileRateLine(summaryA.goalRate, summaryA.assistRate, summaryA.saveRate)}</strong>
+                  <small>{profileSampleLine(summaryA.avgGames)}</small>
+                </div>
+                <div>
+                  <span>Team B rates</span>
+                  <strong>{profileRateLine(summaryB.goalRate, summaryB.assistRate, summaryB.saveRate)}</strong>
+                  <small>{profileSampleLine(summaryB.avgGames)}</small>
+                </div>
+                <div>
+                  <span>Specialist coverage</span>
+                  <strong>A {summaryA.finishers}F/{summaryA.creators}C | B {summaryB.finishers}F/{summaryB.creators}C</strong>
+                  <small>{fmt(shortagePenalty, 1)} shortage penalty</small>
+                </div>
+                <div>
+                  <span>Keeper save floor</span>
+                  <strong>A {fmt(breakdownNumber(option, "rotation_save_floor_a"), 2)} | B {fmt(breakdownNumber(option, "rotation_save_floor_b"), 2)}</strong>
+                  <small>{fmt(breakdownNumber(option, "rotation_save_penalty"), 1)} keeper-profile penalty</small>
+                </div>
+                <div>
+                  <span>Biggest swing</span>
+                  <strong>{detailTopGapRow ? detailTopGapRow.label : "-"}</strong>
+                  <small>{detailTopGapRow ? `${fmt(detailTopGapRow.gap, 2)} gap at x${detailTopGapRow.weight}` : "No profile gap"}</small>
+                </div>
+              </div>
+
+              <div className="profile-balance-grid">
+                {profileRows.map((row) => {
+                  return (
+                    <div className="profile-metric-row" key={row.label}>
+                      <div className="profile-metric-head">
+                        <strong>{row.label}</strong>
+                        <span>gap {fmt(row.gap, 2)} | x{row.weight}</span>
+                      </div>
+                      <div className="profile-bars">
+                        <span>A {fmt(row.a, 2)}</span>
+                        <div className="profile-track"><i className="a" style={{ width: profileMetricWidth(row.a) }} /></div>
+                        <div className="profile-track"><i className="b" style={{ width: profileMetricWidth(row.b) }} /></div>
+                        <span>B {fmt(row.b, 2)}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="profile-debug-copy">
+                <span>Profile read</span>
+                {profileDebugReasons(option, summaryA, summaryB, profileRows, allOptions).map((reason) => <p key={reason}>{reason}</p>)}
+              </div>
+
+              <div className="profile-explainer-grid">
+                {profileExplainers.map((item) => (
+                  <div key={item.title}>
+                    <strong>{item.title}</strong>
+                    <span>{item.copy}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
+
+          <div className="profile-player-columns">
+            {teamColumns.map(({ label, team, summary, className }) => (
+              <div className={`profile-player-team ${className}`} key={label}>
+                <div className="profile-player-team-head">
+                  <span>{label}</span>
+                  <strong>{showProfileDetails ? profileRateLine(summary.goalRate, summary.assistRate, summary.saveRate) : `${summary.finishers} finishers / ${summary.creators} creators`}</strong>
+                </div>
+                {team.map((player) => {
+                  const profile = player.style_profile;
+                  const traits = profilePlayerTraits(player);
+                  return (
+                    <div className={showProfileDetails ? "profile-player-row" : "profile-player-row compact"} key={player.id}>
+                      <div className="profile-player-main">
+                        <strong>{playerLabel(player)}</strong>
+                        <span>{playerProfileRole(player)}</span>
+                      </div>
+                      {profile ? (
+                        <>
+                          {showProfileDetails ? (
+                            <div className="profile-player-traits" aria-label={`${playerLabel(player)} profile traits`}>
+                              {traits.map((trait) => (
+                                <span className={trait.className} title={trait.title} key={trait.label}>
+                                  {trait.label} {fmt(trait.value, 2)}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                          <small>{showProfileDetails ? `${profileRateLine(profile.goalsPerGame, profile.assistsPerGame, profile.saveMomentsPerGame)} | ${fmt(profile.historicMatches)} games` : profileCompactRateLine(profile.goalsPerGame, profile.assistsPerGame, profile.saveMomentsPerGame)}</small>
+                        </>
+                      ) : (
+                        <small>No rate profile</small>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <p className="muted">Profiles are off for this card, so the team engine is falling back to MMR, chemistry, repeat risk and keeper rotation.</p>
+      )}
+    </section>
+  );
+}
+
 function MatchdayAnalysisCard({
   option,
   matches,
   nameMap,
   playerRecords,
   pairRecords,
+  allOptions,
   onClose
 }: {
   option: MatchdayOption;
@@ -642,6 +1181,7 @@ function MatchdayAnalysisCard({
   nameMap: Map<string, string>;
   playerRecords: Map<string, PlayerRecord>;
   pairRecords: { teammate: Map<string, PairRecord>; rivals: Map<string, PairRecord> };
+  allOptions?: MatchdayOption[];
   onClose: () => void;
 }) {
   const cardExplanation = optionExplanation(option);
@@ -697,7 +1237,7 @@ function MatchdayAnalysisCard({
         <div className="report-score">
           <span>Projected score</span>
           <strong>{cardMarket ? `${fmt(cardMarket.expectedScore.a, 1)} - ${fmt(cardMarket.expectedScore.b, 1)}` : "-"}</strong>
-          <small>{fmt(option.ranking.closePct)}% tight-game chance</small>
+          <small>{fmt(option.ranking.closePct)}/100 closeness score</small>
         </div>
         <div className="report-team report-team-b">
           <span>Team B</span>
@@ -729,6 +1269,12 @@ function MatchdayAnalysisCard({
           <div className="analysis-signal-row">
             <div><span>Match potential</span><strong>{fmt(option.ranking.recommendationScore)}%</strong></div>
             <div><span>Expected margin</span><strong>{fmt(option.ranking.predictedMargin, 1)}</strong></div>
+            {option.breakdown.style_enabled ? (
+              <div><span>Profile mix</span><strong>{fmt(breakdownNumber(option, "style_net"), 1)}</strong></div>
+            ) : (
+              <div><span>Profile mix</span><strong>Off</strong></div>
+            )}
+            <div><span>Keeper rotation</span><strong>{fmt(breakdownNumber(option, "rotating_keeper_penalty"), 1)}</strong></div>
             <div><span>Repeat risk</span><strong>{fmt(option.similarityPenalty, 1)}</strong></div>
           </div>
         </section>
@@ -851,18 +1397,27 @@ function MatchdayAnalysisCard({
           </div>
         </div>
       ) : null}
+
+      <ProfileDebugSection option={option} allOptions={allOptions} />
     </section>
   );
 }
 
 export function InteractiveMatchday({
   players,
-  matches
+  matches,
+  modelPlayers = players,
+  adminLeagueId,
+  leagueKey = "matchday"
 }: {
   players: Player[];
   matches: Match[];
+  modelPlayers?: Player[];
+  adminLeagueId?: number;
+  leagueKey?: string;
 }) {
-  const [mode, setMode] = useState<"generator" | "memory">("generator");
+  const [mode, setMode] = useState<"balance" | "editor" | "generator" | "memory">("balance");
+  const [lineupSeed, setLineupSeed] = useState<LineupSeed | null>(null);
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [locksA, setLocksA] = useState<string[]>([]);
   const [locksB, setLocksB] = useState<string[]>([]);
@@ -884,9 +1439,15 @@ export function InteractiveMatchday({
   const activeLocksB = useMemo(() => locksB.filter((key) => selectedKeys.includes(key)), [locksB, selectedKeys]);
   const canGenerate = selectedPlayers.length === 10;
   const playerCountGap = 10 - selectedPlayers.length;
+  const selectedProfileCount = selectedPlayers.filter((player) => player.style_profile).length;
+  const profileCoverageLabel = canGenerate
+    ? selectedProfileCount > 0
+      ? `Profiles active: ${selectedProfileCount}/${selectedPlayers.length}`
+      : "Profiles unavailable"
+    : "";
   const options = useMemo<MatchdayOption[]>(
-    () => canGenerate ? bestBalancedSplit(selectedPlayers, activeLocksA, activeLocksB, matches) : [],
-    [activeLocksA, activeLocksB, canGenerate, matches, selectedPlayers]
+    () => canGenerate && (mode === "generator" || mode === "memory") ? bestBalancedSplit(selectedPlayers, activeLocksA, activeLocksB, matches) : [],
+    [activeLocksA, activeLocksB, canGenerate, matches, selectedPlayers, mode]
   );
   const smartOptions = useMemo(() => buildSmartOptions(options), [options]);
   const displayedOptions = showAllOptions
@@ -915,7 +1476,7 @@ export function InteractiveMatchday({
   );
 
   const memoryMatches = useMemo(() => {
-    if (!canGenerate) return [];
+    if (!canGenerate || mode !== "memory") return [];
     const today = new Set(selectedKeys);
     return matches
       .map((match) => {
@@ -945,7 +1506,7 @@ export function InteractiveMatchday({
       .filter((row) => row.overlap >= 4)
       .sort((a, b) => b.overlap - a.overlap || b.totalGoals - a.totalGoals)
       .slice(0, memoryCount);
-  }, [canGenerate, matches, memoryCount, selectedKeys, selectedPlayers]);
+  }, [canGenerate, matches, memoryCount, selectedKeys, selectedPlayers, mode]);
 
   function toggleSelected(key: string) {
     const isSelected = selectedKeys.includes(key);
@@ -992,8 +1553,10 @@ export function InteractiveMatchday({
   return (
     <div className="interactive-stack matchday-stack">
       <div className="segmented">
-        <button className={mode === "generator" ? "active" : ""} onClick={() => setMode("generator")}>AI Team Generator</button>
-        <button className={mode === "memory" ? "active" : ""} onClick={() => setMode("memory")}>Matchday Memory</button>
+        <button className={mode === "balance" ? "active" : ""} onClick={() => setMode("balance")}>Team Generator</button>
+        <button className={mode === "editor" ? "active" : ""} onClick={() => { setLineupSeed(null); setMode("editor"); }}>Lineup editor</button>
+        <button className={mode === "generator" ? "active" : ""} onClick={() => setMode("generator")}>Legacy selector</button>
+        <button className={mode === "memory" ? "active" : ""} onClick={() => setMode("memory")}>Legacy memory</button>
       </div>
 
       <div className="panel matchday-selection-panel">
@@ -1001,6 +1564,7 @@ export function InteractiveMatchday({
           <div>
             <span className="stat-label">Player pool</span>
             <h2>Today&apos;s Players</h2>
+            <small className="muted">Numbers below are public MMR. The Team Generator uses its own strength and uncertainty estimates.</small>
           </div>
           <div className="selection-actions">
             <strong>{selectedPlayers.length} selected</strong>
@@ -1020,7 +1584,18 @@ export function InteractiveMatchday({
         </div>
       </div>
 
-      {mode === "generator" ? (
+      {mode === "balance" ? <BalancedMatchday players={modelPlayers} selected={selectedPlayers} matches={matches}
+        onEditLineup={seed => { setLineupSeed(seed); setMode("editor"); }}
+        locksA={selectedPlayers.filter(p => activeLocksA.includes(normalizeName(p.name))).map(p => p.id)}
+        locksB={selectedPlayers.filter(p => activeLocksB.includes(normalizeName(p.name))).map(p => p.id)}
+        onLock={(player, side) => toggleLock(normalizeName(player.name), side)}
+        onClearLocks={() => { setLocksA([]); setLocksB([]); }}
+        onReuseMemory={match => {
+          const returning = (team: string | null) => selectedPlayers.filter(player => splitTeam(team).some(name => [normalizeName(player.name), normalizeName(player.display_name)].includes(normalizeName(name)))).map(player => normalizeName(player.name));
+          setLocksA(returning(match.team_a)); setLocksB(returning(match.team_b));
+        }} /> : mode === "editor" ? <LineupEditor key={`${leagueKey}:${lineupSeed?.revision || "draft"}`} players={players} modelPlayers={modelPlayers} matches={matches} selected={selectedPlayers} seed={lineupSeed}
+          storageKey={`lovefive-lineup-v1:${leagueKey}`} onSelectionChange={ids => setSelectedKeys(players.filter(p => ids.includes(p.id)).map(p => normalizeName(p.name)))}
+          sideLocks={{ blue: selectedPlayers.filter(p => activeLocksA.includes(normalizeName(p.name))).map(p => p.id), red: selectedPlayers.filter(p => activeLocksB.includes(normalizeName(p.name))).map(p => p.id) }} /> : mode === "generator" ? (
         <>
           {!selectedPlayers.length ? (
             <div className="panel empty-state">
@@ -1039,9 +1614,10 @@ export function InteractiveMatchday({
                   <div>
                     <span className="stat-label">Smart shortlist</span>
                     <h2>Recommended Teams</h2>
+                    {profileCoverageLabel ? <span className="stat-label">{profileCoverageLabel}</span> : null}
                   </div>
                   <button className="ghost-button" type="button" onClick={() => setShowAllOptions((value) => !value)}>
-                    {showAllOptions ? "Show top 3" : `View all ${options.length}`}
+                    {showAllOptions ? "Show shortlist" : `View all ${options.length}`}
                   </button>
                 </div>
 
@@ -1073,8 +1649,10 @@ export function InteractiveMatchday({
                         </div>
                         <div className="engine-breakdown">
                           <span>{fmt(option.diff, 1)} MMR gap</span>
-                          <span>{fmt(option.ranking.closePct)}% tight-game chance</span>
+                          <span>{fmt(option.ranking.closePct)}/100 closeness score</span>
                           <span>{fmt(option.ranking.predictedMargin, 1)} expected margin</span>
+                          {option.breakdown.style_enabled ? <span>{fmt(breakdownNumber(option, "style_net"), 1)} profile mix</span> : <span>profiles off</span>}
+                          <span>{fmt(breakdownNumber(option, "rotating_keeper_penalty"), 1)} keeper rotation</span>
                         </div>
                         <div className="recommendation-reasons">
                           {details.chips.map((chip) => <span key={chip}>{chip}</span>)}
@@ -1087,7 +1665,7 @@ export function InteractiveMatchday({
 
                 {selectedOption ? (
                   <div className="selected-matchup-actions">
-                    <span>{fmt(selectedOption.ranking.closePct)}% tight-game chance</span>
+                    <span>{fmt(selectedOption.ranking.closePct)}/100 closeness score</span>
                     <button type="button" onClick={() => setCardIndex(optionIndex)}>Use this matchup</button>
                   </div>
                 ) : (
@@ -1152,7 +1730,7 @@ export function InteractiveMatchday({
                       <div className="report-score">
                         <span>Projected score</span>
                         <strong>{cardMarket ? `${fmt(cardMarket.expectedScore.a, 1)} - ${fmt(cardMarket.expectedScore.b, 1)}` : "-"}</strong>
-                        <small>{fmt(cardOption.ranking.closePct)}% tight-game chance</small>
+                        <small>{fmt(cardOption.ranking.closePct)}/100 closeness score</small>
                       </div>
                       <div className="report-team report-team-b">
                         <span>Team B</span>
@@ -1184,6 +1762,12 @@ export function InteractiveMatchday({
                         <div className="analysis-signal-row">
                           <div><span>Match potential</span><strong>{fmt(cardOption.ranking.recommendationScore)}%</strong></div>
                           <div><span>Expected margin</span><strong>{fmt(cardOption.ranking.predictedMargin, 1)}</strong></div>
+                          {cardOption.breakdown.style_enabled ? (
+                            <div><span>Profile mix</span><strong>{fmt(breakdownNumber(cardOption, "style_net"), 1)}</strong></div>
+                          ) : (
+                            <div><span>Profile mix</span><strong>Off</strong></div>
+                          )}
+                          <div><span>Keeper rotation</span><strong>{fmt(breakdownNumber(cardOption, "rotating_keeper_penalty"), 1)}</strong></div>
                           <div><span>Repeat risk</span><strong>{fmt(cardOption.similarityPenalty, 1)}</strong></div>
                         </div>
                       </section>
@@ -1339,6 +1923,8 @@ export function InteractiveMatchday({
                   </div>
                 </div>
               ) : null}
+
+              <ProfileDebugSection option={cardOption} allOptions={options} />
             </section>
           ) : null}
         </>
@@ -1432,6 +2018,7 @@ export function InteractiveMatchday({
                 nameMap={nameMap}
                 playerRecords={playerRecords}
                 pairRecords={pairRecords}
+                allOptions={options}
                 onClose={() => setMemoryCardOption(null)}
               />
             ) : (
@@ -1443,6 +2030,9 @@ export function InteractiveMatchday({
           </div>
         </section>
       )}
+      {adminLeagueId ? <BalanceComparison key={adminLeagueId} leagueId={adminLeagueId} selected={selectedPlayers}
+        locksA={selectedPlayers.filter(p => activeLocksA.includes(normalizeName(p.name))).map(p => p.id)}
+        locksB={selectedPlayers.filter(p => activeLocksB.includes(normalizeName(p.name))).map(p => p.id)} current={options[0]} /> : null}
     </div>
   );
 }

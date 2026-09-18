@@ -26,6 +26,7 @@ export function LiveLeagueLoader({
   children: (props: {
     league: LeagueOption;
     players: Player[];
+    modelPlayers: Player[];
     matches: Match[];
     mmrHistory: MmrHistory[];
     refresh: () => Promise<void>;
@@ -36,6 +37,7 @@ export function LiveLeagueLoader({
   const router = useRouter();
   const [league, setLeague] = useState<LeagueOption | null>(null);
   const [players, setPlayers] = useState<Player[]>([]);
+  const [modelPlayers, setModelPlayers] = useState<Player[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
   const [mmrHistory, setMmrHistory] = useState<MmrHistory[]>([]);
   const [state, setState] = useState<LoadState>("loading");
@@ -47,6 +49,7 @@ export function LiveLeagueLoader({
     try {
       const data = await loadLeagueData(supabase, targetLeague.id, matchLimit);
       setPlayers(data.players);
+      setModelPlayers(data.modelPlayers);
       setMatches(data.matches);
       setMmrHistory(data.mmrHistory);
       setState("ready");
@@ -118,7 +121,7 @@ export function LiveLeagueLoader({
 
   return (
     <LiveAppShell active={active} league={league} matchesCount={matches.length} playersCount={players.length}>
-      {children({ league, players, matches, mmrHistory, refresh })}
+      {children({ league, players, modelPlayers, matches, mmrHistory, refresh })}
     </LiveAppShell>
   );
 }

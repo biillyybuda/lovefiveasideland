@@ -1,0 +1,1157 @@
+{
+  "all/full": {
+    "mvp": [
+      {
+        "key": "13",
+        "value": 88
+      },
+      {
+        "key": "9",
+        "value": 81
+      },
+      {
+        "key": "11",
+        "value": 80
+      },
+      {
+        "key": "7",
+        "value": 73
+      },
+      {
+        "key": "6",
+        "value": 60
+      },
+      {
+        "key": "2",
+        "value": 60
+      },
+      {
+        "key": "4",
+        "value": 58
+      },
+      {
+        "key": "10",
+        "value": 55
+      },
+      {
+        "key": "5",
+        "value": 49
+      },
+      {
+        "key": "12",
+        "value": 49
+      },
+      {
+        "key": "3",
+        "value": 47
+      },
+      {
+        "key": "8",
+        "value": 47
+      },
+      {
+        "key": "14",
+        "value": 46
+      },
+      {
+        "key": "1",
+        "value": 39
+      }
+    ],
+    "improved": {
+      "title": "Most improved",
+      "subtitle": "Ranked by period MMR gain",
+      "rows": [
+        {
+          "key": "2",
+          "value": 117,
+          "unit": "MMR"
+        },
+        {
+          "key": "1",
+          "value": 107,
+          "unit": "MMR"
+        },
+        {
+          "key": "3",
+          "value": 80,
+          "unit": "MMR"
+        },
+        {
+          "key": "4",
+          "value": 80,
+          "unit": "MMR"
+        },
+        {
+          "key": "7",
+          "value": 66,
+          "unit": "MMR"
+        }
+      ]
+    }
+  },
+  "2025/full": {
+    "mvp": [
+      {
+        "key": "13",
+        "value": 81
+      },
+      {
+        "key": "11",
+        "value": 79
+      },
+      {
+        "key": "7",
+        "value": 73
+      },
+      {
+        "key": "9",
+        "value": 69
+      },
+      {
+        "key": "14",
+        "value": 59
+      },
+      {
+        "key": "10",
+        "value": 56
+      },
+      {
+        "key": "5",
+        "value": 54
+      },
+      {
+        "key": "8",
+        "value": 52
+      },
+      {
+        "key": "12",
+        "value": 51
+      },
+      {
+        "key": "4",
+        "value": 50
+      },
+      {
+        "key": "2",
+        "value": 45
+      },
+      {
+        "key": "1",
+        "value": 44
+      },
+      {
+        "key": "3",
+        "value": 41
+      },
+      {
+        "key": "6",
+        "value": 40
+      }
+    ],
+    "improved": {
+      "title": "Most improved",
+      "subtitle": "Ranked by period MMR gain",
+      "rows": [
+        {
+          "key": "1",
+          "value": 91,
+          "unit": "MMR"
+        },
+        {
+          "key": "7",
+          "value": 61,
+          "unit": "MMR"
+        },
+        {
+          "key": "2",
+          "value": 58,
+          "unit": "MMR"
+        },
+        {
+          "key": "5",
+          "value": 48,
+          "unit": "MMR"
+        },
+        {
+          "key": "3",
+          "value": 45,
+          "unit": "MMR"
+        }
+      ]
+    }
+  },
+  "2025/ytd": {
+    "mvp": [
+      {
+        "key": "13",
+        "value": 81
+      },
+      {
+        "key": "11",
+        "value": 79
+      },
+      {
+        "key": "7",
+        "value": 73
+      },
+      {
+        "key": "9",
+        "value": 69
+      },
+      {
+        "key": "14",
+        "value": 59
+      },
+      {
+        "key": "10",
+        "value": 56
+      },
+      {
+        "key": "5",
+        "value": 54
+      },
+      {
+        "key": "8",
+        "value": 52
+      },
+      {
+        "key": "12",
+        "value": 51
+      },
+      {
+        "key": "4",
+        "value": 50
+      },
+      {
+        "key": "2",
+        "value": 45
+      },
+      {
+        "key": "1",
+        "value": 44
+      },
+      {
+        "key": "3",
+        "value": 41
+      },
+      {
+        "key": "6",
+        "value": 40
+      }
+    ],
+    "improved": {
+      "title": "Most improved",
+      "subtitle": "Ranked by period MMR gain",
+      "rows": [
+        {
+          "key": "1",
+          "value": 91,
+          "unit": "MMR"
+        },
+        {
+          "key": "7",
+          "value": 61,
+          "unit": "MMR"
+        },
+        {
+          "key": "2",
+          "value": 58,
+          "unit": "MMR"
+        },
+        {
+          "key": "5",
+          "value": 48,
+          "unit": "MMR"
+        },
+        {
+          "key": "3",
+          "value": 45,
+          "unit": "MMR"
+        }
+      ]
+    }
+  },
+  "2025/q1": {
+    "mvp": [
+      {
+        "key": "13",
+        "value": 87
+      },
+      {
+        "key": "11",
+        "value": 82
+      },
+      {
+        "key": "14",
+        "value": 70
+      },
+      {
+        "key": "9",
+        "value": 60
+      },
+      {
+        "key": "7",
+        "value": 55
+      },
+      {
+        "key": "12",
+        "value": 54
+      },
+      {
+        "key": "10",
+        "value": 51
+      },
+      {
+        "key": "5",
+        "value": 49
+      },
+      {
+        "key": "2",
+        "value": 48
+      },
+      {
+        "key": "8",
+        "value": 45
+      },
+      {
+        "key": "4",
+        "value": 42
+      },
+      {
+        "key": "1",
+        "value": 37
+      },
+      {
+        "key": "3",
+        "value": 32
+      }
+    ],
+    "improved": {
+      "title": "Quarter surge",
+      "subtitle": "Ranked by MMR gained in this quarter",
+      "rows": [
+        {
+          "key": "2",
+          "value": 38,
+          "unit": "MMR"
+        },
+        {
+          "key": "1",
+          "value": 29,
+          "unit": "MMR"
+        },
+        {
+          "key": "11",
+          "value": 26,
+          "unit": "MMR"
+        },
+        {
+          "key": "5",
+          "value": 24,
+          "unit": "MMR"
+        },
+        {
+          "key": "7",
+          "value": 23,
+          "unit": "MMR"
+        }
+      ]
+    }
+  },
+  "2025/q2": {
+    "mvp": [
+      {
+        "key": "10",
+        "value": 73
+      },
+      {
+        "key": "8",
+        "value": 69
+      },
+      {
+        "key": "12",
+        "value": 68
+      },
+      {
+        "key": "14",
+        "value": 65
+      },
+      {
+        "key": "13",
+        "value": 64
+      },
+      {
+        "key": "6",
+        "value": 61
+      },
+      {
+        "key": "4",
+        "value": 56
+      },
+      {
+        "key": "9",
+        "value": 52
+      },
+      {
+        "key": "11",
+        "value": 49
+      },
+      {
+        "key": "7",
+        "value": 48
+      },
+      {
+        "key": "5",
+        "value": 44
+      },
+      {
+        "key": "1",
+        "value": 42
+      },
+      {
+        "key": "2",
+        "value": 41
+      },
+      {
+        "key": "3",
+        "value": 33
+      }
+    ],
+    "improved": {
+      "title": "Quarter surge",
+      "subtitle": "Ranked by MMR gained in this quarter",
+      "rows": [
+        {
+          "key": "6",
+          "value": 44,
+          "unit": "MMR"
+        },
+        {
+          "key": "8",
+          "value": 44,
+          "unit": "MMR"
+        },
+        {
+          "key": "4",
+          "value": 43,
+          "unit": "MMR"
+        },
+        {
+          "key": "1",
+          "value": 37,
+          "unit": "MMR"
+        },
+        {
+          "key": "10",
+          "value": 36,
+          "unit": "MMR"
+        }
+      ]
+    }
+  },
+  "2025/q3": {
+    "mvp": [
+      {
+        "key": "11",
+        "value": 70
+      },
+      {
+        "key": "13",
+        "value": 66
+      },
+      {
+        "key": "14",
+        "value": 66
+      },
+      {
+        "key": "7",
+        "value": 63
+      },
+      {
+        "key": "12",
+        "value": 56
+      },
+      {
+        "key": "10",
+        "value": 53
+      },
+      {
+        "key": "3",
+        "value": 53
+      },
+      {
+        "key": "8",
+        "value": 48
+      },
+      {
+        "key": "5",
+        "value": 48
+      },
+      {
+        "key": "4",
+        "value": 46
+      },
+      {
+        "key": "1",
+        "value": 44
+      },
+      {
+        "key": "6",
+        "value": 41
+      },
+      {
+        "key": "2",
+        "value": 41
+      }
+    ],
+    "improved": {
+      "title": "Quarter surge",
+      "subtitle": "Ranked by MMR gained in this quarter",
+      "rows": [
+        {
+          "key": "3",
+          "value": 48,
+          "unit": "MMR"
+        },
+        {
+          "key": "7",
+          "value": 37,
+          "unit": "MMR"
+        },
+        {
+          "key": "11",
+          "value": 20,
+          "unit": "MMR"
+        },
+        {
+          "key": "1",
+          "value": 18,
+          "unit": "MMR"
+        },
+        {
+          "key": "5",
+          "value": 16,
+          "unit": "MMR"
+        }
+      ]
+    }
+  },
+  "2025/q4": {
+    "mvp": [
+      {
+        "key": "13",
+        "value": 78
+      },
+      {
+        "key": "11",
+        "value": 75
+      },
+      {
+        "key": "9",
+        "value": 68
+      },
+      {
+        "key": "7",
+        "value": 66
+      },
+      {
+        "key": "14",
+        "value": 58
+      },
+      {
+        "key": "10",
+        "value": 57
+      },
+      {
+        "key": "12",
+        "value": 55
+      },
+      {
+        "key": "5",
+        "value": 54
+      },
+      {
+        "key": "8",
+        "value": 53
+      },
+      {
+        "key": "4",
+        "value": 42
+      },
+      {
+        "key": "1",
+        "value": 40
+      },
+      {
+        "key": "2",
+        "value": 39
+      },
+      {
+        "key": "6",
+        "value": 39
+      }
+    ],
+    "improved": {
+      "title": "Quarter surge",
+      "subtitle": "Ranked by MMR gained in this quarter",
+      "rows": [
+        {
+          "key": "7",
+          "value": 27,
+          "unit": "MMR"
+        },
+        {
+          "key": "5",
+          "value": 24,
+          "unit": "MMR"
+        },
+        {
+          "key": "11",
+          "value": 16,
+          "unit": "MMR"
+        },
+        {
+          "key": "13",
+          "value": 13,
+          "unit": "MMR"
+        },
+        {
+          "key": "2",
+          "value": 11,
+          "unit": "MMR"
+        }
+      ]
+    }
+  },
+  "2026/full": {
+    "mvp": [
+      {
+        "key": "13",
+        "value": 81
+      },
+      {
+        "key": "9",
+        "value": 76
+      },
+      {
+        "key": "11",
+        "value": 72
+      },
+      {
+        "key": "7",
+        "value": 65
+      },
+      {
+        "key": "6",
+        "value": 59
+      },
+      {
+        "key": "2",
+        "value": 57
+      },
+      {
+        "key": "4",
+        "value": 53
+      },
+      {
+        "key": "10",
+        "value": 52
+      },
+      {
+        "key": "12",
+        "value": 47
+      },
+      {
+        "key": "3",
+        "value": 46
+      },
+      {
+        "key": "5",
+        "value": 44
+      },
+      {
+        "key": "14",
+        "value": 43
+      },
+      {
+        "key": "8",
+        "value": 42
+      },
+      {
+        "key": "1",
+        "value": 37
+      }
+    ],
+    "improved": {
+      "title": "Most improved",
+      "subtitle": "MVP-style score change vs 2025 - Full year",
+      "rows": [
+        {
+          "key": "6",
+          "value": 19,
+          "unit": "pts"
+        },
+        {
+          "key": "2",
+          "value": 12,
+          "unit": "pts"
+        },
+        {
+          "key": "9",
+          "value": 7,
+          "unit": "pts"
+        },
+        {
+          "key": "3",
+          "value": 5,
+          "unit": "pts"
+        },
+        {
+          "key": "4",
+          "value": 3,
+          "unit": "pts"
+        }
+      ]
+    }
+  },
+  "2026/ytd": {
+    "mvp": [
+      {
+        "key": "13",
+        "value": 81
+      },
+      {
+        "key": "9",
+        "value": 76
+      },
+      {
+        "key": "11",
+        "value": 72
+      },
+      {
+        "key": "7",
+        "value": 65
+      },
+      {
+        "key": "6",
+        "value": 59
+      },
+      {
+        "key": "2",
+        "value": 57
+      },
+      {
+        "key": "4",
+        "value": 53
+      },
+      {
+        "key": "10",
+        "value": 52
+      },
+      {
+        "key": "12",
+        "value": 47
+      },
+      {
+        "key": "3",
+        "value": 46
+      },
+      {
+        "key": "5",
+        "value": 44
+      },
+      {
+        "key": "14",
+        "value": 43
+      },
+      {
+        "key": "8",
+        "value": 42
+      },
+      {
+        "key": "1",
+        "value": 37
+      }
+    ],
+    "improved": {
+      "title": "Most improved",
+      "subtitle": "MVP-style score change vs 2025 - same point",
+      "rows": [
+        {
+          "key": "6",
+          "value": 19,
+          "unit": "pts"
+        },
+        {
+          "key": "2",
+          "value": 12,
+          "unit": "pts"
+        },
+        {
+          "key": "9",
+          "value": 7,
+          "unit": "pts"
+        },
+        {
+          "key": "3",
+          "value": 5,
+          "unit": "pts"
+        },
+        {
+          "key": "4",
+          "value": 3,
+          "unit": "pts"
+        }
+      ]
+    }
+  },
+  "2026/q1": {
+    "mvp": [
+      {
+        "key": "13",
+        "value": 79
+      },
+      {
+        "key": "11",
+        "value": 60
+      },
+      {
+        "key": "9",
+        "value": 57
+      },
+      {
+        "key": "4",
+        "value": 57
+      },
+      {
+        "key": "7",
+        "value": 56
+      },
+      {
+        "key": "2",
+        "value": 53
+      },
+      {
+        "key": "14",
+        "value": 53
+      },
+      {
+        "key": "6",
+        "value": 52
+      },
+      {
+        "key": "10",
+        "value": 52
+      },
+      {
+        "key": "12",
+        "value": 51
+      },
+      {
+        "key": "1",
+        "value": 46
+      },
+      {
+        "key": "3",
+        "value": 46
+      },
+      {
+        "key": "5",
+        "value": 42
+      }
+    ],
+    "improved": {
+      "title": "Quarter surge",
+      "subtitle": "Ranked by MMR gained in this quarter",
+      "rows": [
+        {
+          "key": "4",
+          "value": 28,
+          "unit": "MMR"
+        },
+        {
+          "key": "2",
+          "value": 24,
+          "unit": "MMR"
+        },
+        {
+          "key": "6",
+          "value": 21,
+          "unit": "MMR"
+        },
+        {
+          "key": "13",
+          "value": 10,
+          "unit": "MMR"
+        },
+        {
+          "key": "1",
+          "value": 8,
+          "unit": "MMR"
+        }
+      ]
+    }
+  },
+  "2026/q2": {
+    "mvp": [
+      {
+        "key": "12",
+        "value": 67
+      },
+      {
+        "key": "10",
+        "value": 67
+      },
+      {
+        "key": "6",
+        "value": 62
+      },
+      {
+        "key": "8",
+        "value": 62
+      },
+      {
+        "key": "14",
+        "value": 61
+      },
+      {
+        "key": "11",
+        "value": 61
+      },
+      {
+        "key": "9",
+        "value": 58
+      },
+      {
+        "key": "7",
+        "value": 57
+      },
+      {
+        "key": "13",
+        "value": 55
+      },
+      {
+        "key": "3",
+        "value": 50
+      },
+      {
+        "key": "4",
+        "value": 50
+      },
+      {
+        "key": "5",
+        "value": 42
+      },
+      {
+        "key": "1",
+        "value": 38
+      }
+    ],
+    "improved": {
+      "title": "Quarter surge",
+      "subtitle": "Ranked by MMR gained in this quarter",
+      "rows": [
+        {
+          "key": "6",
+          "value": 44,
+          "unit": "MMR"
+        },
+        {
+          "key": "3",
+          "value": 31,
+          "unit": "MMR"
+        },
+        {
+          "key": "10",
+          "value": 29,
+          "unit": "MMR"
+        },
+        {
+          "key": "12",
+          "value": 29,
+          "unit": "MMR"
+        },
+        {
+          "key": "8",
+          "value": 27,
+          "unit": "MMR"
+        }
+      ]
+    }
+  },
+  "2026/q3": {
+    "mvp": [
+      {
+        "key": "9",
+        "value": 67
+      },
+      {
+        "key": "7",
+        "value": 66
+      },
+      {
+        "key": "13",
+        "value": 66
+      },
+      {
+        "key": "5",
+        "value": 63
+      },
+      {
+        "key": "14",
+        "value": 55
+      },
+      {
+        "key": "3",
+        "value": 54
+      },
+      {
+        "key": "1",
+        "value": 50
+      },
+      {
+        "key": "2",
+        "value": 50
+      },
+      {
+        "key": "10",
+        "value": 49
+      },
+      {
+        "key": "6",
+        "value": 46
+      },
+      {
+        "key": "8",
+        "value": 45
+      },
+      {
+        "key": "12",
+        "value": 43
+      },
+      {
+        "key": "4",
+        "value": 43
+      }
+    ],
+    "improved": {
+      "title": "Quarter surge",
+      "subtitle": "Ranked by MMR gained in this quarter",
+      "rows": [
+        {
+          "key": "5",
+          "value": 42,
+          "unit": "MMR"
+        },
+        {
+          "key": "7",
+          "value": 32,
+          "unit": "MMR"
+        },
+        {
+          "key": "9",
+          "value": 25,
+          "unit": "MMR"
+        },
+        {
+          "key": "1",
+          "value": 22,
+          "unit": "MMR"
+        },
+        {
+          "key": "3",
+          "value": 16,
+          "unit": "MMR"
+        }
+      ]
+    }
+  },
+  "2026/q4": {
+    "mvp": [
+      {
+        "key": "13",
+        "value": 81
+      },
+      {
+        "key": "11",
+        "value": 70
+      },
+      {
+        "key": "9",
+        "value": 69
+      },
+      {
+        "key": "7",
+        "value": 57
+      },
+      {
+        "key": "10",
+        "value": 54
+      },
+      {
+        "key": "6",
+        "value": 52
+      },
+      {
+        "key": "12",
+        "value": 52
+      },
+      {
+        "key": "4",
+        "value": 50
+      },
+      {
+        "key": "2",
+        "value": 49
+      },
+      {
+        "key": "14",
+        "value": 45
+      },
+      {
+        "key": "8",
+        "value": 42
+      },
+      {
+        "key": "3",
+        "value": 39
+      },
+      {
+        "key": "1",
+        "value": 36
+      }
+    ],
+    "improved": {
+      "title": "Quarter surge",
+      "subtitle": "Ranked by MMR gained in this quarter",
+      "rows": [
+        {
+          "key": "13",
+          "value": 25,
+          "unit": "MMR"
+        },
+        {
+          "key": "4",
+          "value": 23,
+          "unit": "MMR"
+        },
+        {
+          "key": "2",
+          "value": 20,
+          "unit": "MMR"
+        },
+        {
+          "key": "6",
+          "value": 19,
+          "unit": "MMR"
+        },
+        {
+          "key": "9",
+          "value": 19,
+          "unit": "MMR"
+        }
+      ]
+    }
+  }
+}

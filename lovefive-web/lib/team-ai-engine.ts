@@ -7,6 +7,7 @@ import {
   type Match,
   type Player
 } from "./demo-data";
+import type { PlayerStyleProfile } from "./player-style-profiles";
 import { STARTING_MMR } from "./mmr-engine";
 
 type PairStats = {
@@ -15,6 +16,7 @@ type PairStats = {
   draws: number;
   losses: number;
   goalDiffs: number[];
+  lossMargins: number[];
   scoreSum: number;
 };
 
@@ -22,6 +24,11 @@ const EXPECTED_CHEMISTRY_MIN_GAMES = 4;
 const EXPECTED_CHEMISTRY_FULL_GAMES = 10;
 const BAD_PAIR_MIN_GAMES = 5;
 const BAD_PAIR_FULL_GAMES = 12;
+const MAX_RETURNED_MATCHUPS = 150;
+const PROFILE_SPECIALIST_FLOOR = 0.7;
+const PROFILE_SECONDARY_FLOOR = 0.72;
+const PROFILE_SECONDARY_MAX_GAP = 0.14;
+type ProfileRoleKey = "finisher" | "creator" | "save";
 
 type EngineState = {
   matches: Match[];
@@ -34,6 +41,7 @@ type EngineState = {
   baseChemistry: Map<string, number>;
   badPairPenalty: Map<string, number>;
   trioSynergy: Map<string, number>;
+  styleProfiles: Map<string, PlayerStyleProfile>;
 };
 
 export type TeamOption = {
@@ -57,9 +65,11 @@ export type TeamOption = {
 };
 
 export function buildEngineState(players: Player[], matches: Match[]): EngineState {
+  matches = matches.filter((match) => match.processed === 1 && scoreParts(match.score));
   const mmrMap = new Map<string, number>();
   const fitnessMap = new Map<string, string>();
   const totalMatches = new Map<string, number>();
+  const styleProfiles = new Map<string, PlayerStyleProfile>();
   const playerScore = new Map<string, number[]>();
   const formRows = new Map<string, Array<{ date: string; outcome: "W" | "D" | "L" }>>();
 
@@ -69,6 +79,9 @@ export function buildEngineState(players: Player[], matches: Match[]): EngineSta
     mmrMap.set(key, numberOr(player.mmr, STARTING_MMR));
     fitnessMap.set(key, player.fitness || "Medium");
     totalMatches.set(key, 0);
+    if (player.style_profile) {
+      styleProfiles.set(key, player.style_profile);
+    }
   }
 
   for (const match of matches) {
@@ -115,7 +128,8 @@ export function buildEngineState(players: Player[], matches: Match[]): EngineSta
     playerWinRate,
     baseChemistry,
     badPairPenalty,
-    trioSynergy
+    trioSynergy,
+    styleProfiles
   };
 }
 
@@ -165,7 +179,7 @@ export function bestBalancedSplit(selected: Player[], locksA: string[] = [], loc
   }
 
   walk(0, []);
-  return rankGeneratedMatchups(candidates).slice(0, 20);
+  return rankGeneratedMatchups(candidates).slice(0, MAX_RETURNED_MATCHUPS);
 }
 
 export function evaluateTeams(teamA: string[], teamB: string[], state: EngineState) {
@@ -190,6 +204,7 @@ export function evaluateTeams(teamA: string[], teamB: string[], state: EngineSta
   const expA = average(aKeys.map((name) => state.totalMatches.get(name) || 0));
   const expB = average(bKeys.map((name) => state.totalMatches.get(name) || 0));
   const experienceGap = Math.abs(expA - expB);
+  const rotation = rotatingKeeperComponents(aKeys, bKeys, effA, effB, state);
 
   const badTotalRaw = badA + badB;
   const badDiffRaw = Math.abs(badA - badB);
@@ -213,6 +228,7 @@ export function evaluateTeams(teamA: string[], teamB: string[], state: EngineSta
     + badDiff * 0.25
     + similarityPenalty
     + experiencePenalty
+    + rotation.rotating_keeper_penalty
     + style.style_net;
 
   const breakdown = {
@@ -241,6 +257,7 @@ export function evaluateTeams(teamA: string[], teamB: string[], state: EngineSta
     similarity_penalty: similarityPenalty,
     experience_gap: experienceGap,
     experience_penalty: experiencePenalty,
+    ...rotation,
     ...style
   };
 
@@ -314,8 +331,9 @@ function matchupRecommendationScore(score: number, breakdown: Record<string, num
   const badTotal = clamp(numberOr(breakdown.badpair_total, 0), 0, 100);
   const simPen = clamp(numberOr(breakdown.similarity_penalty, 0), 0, 100);
   const experienceGap = clamp(numberOr(breakdown.experience_gap, 0), 0, 50);
+  const rotationPenalty = clamp(numberOr(breakdown.rotating_keeper_penalty, 0), 0, 50);
   const styleNet = clamp(numberOr(breakdown.style_net, 0), 0, 20);
-  const fallbackMargin = 1.05 + mmrDiff / 18 + spreadDiff / 75 + chemDiff / 22 + badTotal / 8 + simPen / 8 + Math.max(0, experienceGap - 1.5) / 8 + styleNet / 5;
+  const fallbackMargin = 1.05 + mmrDiff / 18 + spreadDiff / 75 + chemDiff / 22 + badTotal / 8 + simPen / 8 + rotationPenalty / 10 + Math.max(0, experienceGap - 1.5) / 8 + styleNet / 5;
   const predictedMargin = clamp(fallbackMargin, 0.4, 12);
   const closePct = clamp(94 - predictedMargin * 11 - mmrDiff * 0.2, 8, 94);
   const recommendationScore = clamp(closePct - Math.max(0, predictedMargin - 2) * 7.5 - Math.max(0, mmrDiff - 25) * 0.25 - score / 45, 0, 100);
@@ -349,6 +367,7 @@ function buildPairState(matches: Match[], playerWinRate: Map<string, number>) {
           row.losses += outcome === "L" ? 1 : 0;
           row.scoreSum += scoreMap[outcome];
           row.goalDiffs.push(score ? Math.abs(score[0] - score[1]) : 0);
+          if (outcome === "L" && score) row.lossMargins.push(Math.abs(score[0] - score[1]));
         }
       }
     }
@@ -371,7 +390,7 @@ function buildPairState(matches: Match[], playerWinRate: Map<string, number>) {
     const drop = expectedRate - actualRate;
     if (row.matches >= BAD_PAIR_MIN_GAMES && drop >= 0.16) {
       const sampleFactor = evidenceConfidence(row.matches, BAD_PAIR_MIN_GAMES, BAD_PAIR_FULL_GAMES);
-      const heavyLossLift = Math.max(0, avgGd - 2) * 0.65;
+      const heavyLossLift = Math.max(0, average(row.lossMargins) - 2) * 0.65;
       badPairPenalty.set(key, clamp((drop * 30 + heavyLossLift) * sampleFactor, 0, 12));
     }
   }
@@ -450,13 +469,211 @@ function teamBadPairBadness(team: string[], state: EngineState) {
 }
 
 function teamStyleComponents(teamA: string[], teamB: string[], state: EngineState) {
+  const profileA = teamStyleProfile(teamA, state);
+  const profileB = teamStyleProfile(teamB, state);
+  if (profileA.profileCount + profileB.profileCount < 2) {
+    return {
+      style_enabled: false,
+      style_finishing_a: 0,
+      style_finishing_b: 0,
+      style_creation_a: 0,
+      style_creation_b: 0,
+      style_save_a: 0,
+      style_save_b: 0,
+      style_impact_a: 0,
+      style_impact_b: 0,
+      style_clutch_a: 0,
+      style_clutch_b: 0,
+      style_profile_count_a: 0,
+      style_profile_count_b: 0,
+      style_finishing_diff: 0,
+      style_creation_diff: 0,
+      style_save_diff: 0,
+      style_impact_diff: 0,
+      style_clutch_diff: 0,
+      style_creator_shortage: 0,
+      style_finisher_shortage: 0,
+      style_penalty: 0,
+      style_net: 0
+    };
+  }
+
+  const finishingDiff = Math.abs(profileA.finishing - profileB.finishing);
+  const creationDiff = Math.abs(profileA.creation - profileB.creation);
+  const saveDiff = Math.abs(profileA.saveImpact - profileB.saveImpact);
+  const impactDiff = Math.abs(profileA.impact - profileB.impact);
+  const clutchDiff = Math.abs(profileA.clutch - profileB.clutch);
+  const creatorShortage = profileA.creatorCount === 0 || profileB.creatorCount === 0 ? 0.75 : 0;
+  const finisherShortage = profileA.finisherCount === 0 || profileB.finisherCount === 0 ? 0.75 : 0;
+  const stylePenalty = clamp(
+    finishingDiff * 1.65
+    + creationDiff * 1.65
+    + saveDiff * 0.35
+    + impactDiff * 1.1
+    + clutchDiff * 0.6
+    + creatorShortage
+    + finisherShortage,
+    0,
+    4
+  );
+
   return {
-    style_finishing_diff: 0,
-    style_creation_diff: 0,
-    style_defence_diff: 0,
-    style_creator_shortage: 0,
-    style_finisher_shortage: 0,
-    style_net: 0
+    style_enabled: true,
+    style_finishing_a: profileA.finishing,
+    style_finishing_b: profileB.finishing,
+    style_creation_a: profileA.creation,
+    style_creation_b: profileB.creation,
+    style_save_a: profileA.saveImpact,
+    style_save_b: profileB.saveImpact,
+    style_impact_a: profileA.impact,
+    style_impact_b: profileB.impact,
+    style_clutch_a: profileA.clutch,
+    style_clutch_b: profileB.clutch,
+    style_profile_count_a: profileA.profileCount,
+    style_profile_count_b: profileB.profileCount,
+    style_finishing_diff: finishingDiff,
+    style_creation_diff: creationDiff,
+    style_save_diff: saveDiff,
+    style_impact_diff: impactDiff,
+    style_clutch_diff: clutchDiff,
+    style_creator_shortage: creatorShortage,
+    style_finisher_shortage: finisherShortage,
+    style_penalty: stylePenalty,
+    style_net: stylePenalty
+  };
+}
+
+function teamStyleProfile(team: string[], state: EngineState) {
+  const profiles = team
+    .map((name) => state.styleProfiles.get(name))
+    .filter((profile): profile is PlayerStyleProfile => Boolean(profile));
+  const profileCount = profiles.length;
+  const finishing = average(profiles.map((profile) => profile.finishing));
+  const creation = average(profiles.map((profile) => profile.creation));
+  const saveImpact = average(profiles.map((profile) => profile.saveImpact));
+  const impact = average(profiles.map((profile) => profile.impact));
+  const clutch = average(profiles.map((profile) => profile.clutch));
+  const creatorCount = profiles.filter((profile) => profileHasRole(profile, "creator")).length;
+  const finisherCount = profiles.filter((profile) => profileHasRole(profile, "finisher")).length;
+
+  return {
+    profileCount,
+    finishing,
+    creation,
+    saveImpact,
+    impact,
+    clutch,
+    creatorCount,
+    finisherCount
+  };
+}
+
+function profileRoleTraits(profile: PlayerStyleProfile): Array<{ key: ProfileRoleKey; value: number }> {
+  const traits = [
+    { key: "finisher" as const, value: numberOr(profile.finishing, 0) },
+    { key: "creator" as const, value: numberOr(profile.creation, 0) },
+    { key: "save" as const, value: numberOr(profile.saveImpact, 0) }
+  ].sort((a, b) => b.value - a.value);
+  const [first, second] = traits;
+  if (!first || first.value < PROFILE_SPECIALIST_FLOOR) return [];
+  if (second && second.value >= PROFILE_SECONDARY_FLOOR && first.value - second.value <= PROFILE_SECONDARY_MAX_GAP) {
+    return [first, second];
+  }
+  return [first];
+}
+
+function profileHasRole(profile: PlayerStyleProfile, role: ProfileRoleKey) {
+  return profileRoleTraits(profile).some((trait) => trait.key === role);
+}
+
+function keeperSaveReadiness(name: string, state: EngineState) {
+  const profile = state.styleProfiles.get(name);
+  if (!profile) return null;
+  const rawSaveImpact = clamp(numberOr(profile.saveImpact, 0), 0, 1);
+  const saveMoments = numberOr(profile.saveMoments, 0);
+  const confidence = clamp(saveMoments / 8, 0, 1);
+  const neutral = 0.45;
+  return neutral * (1 - confidence) + rawSaveImpact * confidence;
+}
+
+function teamKeeperSaveProfile(team: string[], state: EngineState) {
+  const values = team.map((name) => keeperSaveReadiness(name, state) ?? 0.45);
+  const known = team.filter((name) => keeperSaveReadiness(name, state) !== null).length;
+  const credible = values.filter((value) => value >= 0.55).length;
+  return {
+    known,
+    average: average(values),
+    floor: lowerAverage(values, 2),
+    weakest: lowestValue(values),
+    credible
+  };
+}
+
+function rotatingKeeperComponents(teamA: string[], teamB: string[], effA: number[], effB: number[], state: EngineState) {
+  const floorA = lowerAverage(effA, 2);
+  const floorB = lowerAverage(effB, 2);
+  const weakestA = lowestValue(effA);
+  const weakestB = lowestValue(effB);
+  const expFloorA = lowerAverage(teamA.map((name) => numberOr(state.totalMatches.get(name), 0)), 2);
+  const expFloorB = lowerAverage(teamB.map((name) => numberOr(state.totalMatches.get(name), 0)), 2);
+  const saveA = teamKeeperSaveProfile(teamA, state);
+  const saveB = teamKeeperSaveProfile(teamB, state);
+  const floorGap = Math.abs(floorA - floorB);
+  const weakestGap = Math.abs(weakestA - weakestB);
+  const expFloorGap = Math.abs(expFloorA - expFloorB);
+  const saveAvgGap = Math.abs(saveA.average - saveB.average);
+  const saveFloorGap = Math.abs(saveA.floor - saveB.floor);
+  const saveWeakestGap = Math.abs(saveA.weakest - saveB.weakest);
+  const saveCoverageGap = Math.abs(saveA.credible - saveB.credible);
+  const saveProfilesEnabled = saveA.known + saveB.known >= 2;
+  const savePenalty = saveProfilesEnabled
+    ? clamp(
+      saveFloorGap * 3.2
+      + saveAvgGap * 1.25
+      + saveWeakestGap * 1.1
+      + saveCoverageGap * 0.35,
+      0,
+      4
+    )
+    : 0;
+  const basePenalty = clamp(
+    floorGap * 0.18
+    + weakestGap * 0.05
+    + Math.max(0, expFloorGap - 2) * 0.18,
+    0,
+    18
+  );
+  const penalty = clamp(basePenalty + savePenalty, 0, 18);
+
+  return {
+    rotating_keeper_mode: true,
+    rotation_floor_a: floorA,
+    rotation_floor_b: floorB,
+    rotation_floor_gap: floorGap,
+    rotation_weakest_a: weakestA,
+    rotation_weakest_b: weakestB,
+    rotation_weakest_gap: weakestGap,
+    rotation_experience_floor_a: expFloorA,
+    rotation_experience_floor_b: expFloorB,
+    rotation_experience_floor_gap: expFloorGap,
+    rotation_base_penalty: basePenalty,
+    rotation_save_enabled: saveProfilesEnabled,
+    rotation_save_a: saveA.average,
+    rotation_save_b: saveB.average,
+    rotation_save_gap: saveAvgGap,
+    rotation_save_floor_a: saveA.floor,
+    rotation_save_floor_b: saveB.floor,
+    rotation_save_floor_gap: saveFloorGap,
+    rotation_save_weakest_a: saveA.weakest,
+    rotation_save_weakest_b: saveB.weakest,
+    rotation_save_weakest_gap: saveWeakestGap,
+    rotation_save_coverage_a: saveA.credible,
+    rotation_save_coverage_b: saveB.credible,
+    rotation_save_coverage_gap: saveCoverageGap,
+    rotation_save_known_a: saveA.known,
+    rotation_save_known_b: saveB.known,
+    rotation_save_penalty: savePenalty,
+    rotating_keeper_penalty: penalty
   };
 }
 
@@ -553,7 +770,7 @@ function trioKeys(team: string[]) {
 
 function touchPair(map: Map<string, PairStats>, a: string, b: string) {
   const key = pairKey(a, b);
-  const existing = map.get(key) || { matches: 0, wins: 0, draws: 0, losses: 0, goalDiffs: [], scoreSum: 0 };
+  const existing = map.get(key) || { matches: 0, wins: 0, draws: 0, losses: 0, goalDiffs: [], lossMargins: [], scoreSum: 0 };
   map.set(key, existing);
   return existing;
 }
@@ -597,6 +814,17 @@ function countOverlap(a: Set<string>, b: Set<string>) {
 
 function average(values: number[]) {
   return values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1);
+}
+
+function lowerAverage(values: number[], count: number) {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!sorted.length) return STARTING_MMR;
+  return average(sorted.slice(0, Math.min(count, sorted.length)));
+}
+
+function lowestValue(values: number[]) {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+  return sorted[0] ?? STARTING_MMR;
 }
 
 function standardDeviation(values: number[]) {

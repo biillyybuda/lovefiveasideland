@@ -1,5 +1,11 @@
+import { loadAllPages } from "./pagination";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import type { League, Match, MmrHistory, Player } from "@/lib/demo-data";
+import {
+  attachStyleProfiles,
+  type HighlightMomentRow,
+  type MatchStatRow
+} from "@/lib/player-style-profiles";
 
 export type Membership = {
   league_id: number;
@@ -13,6 +19,7 @@ export type LeagueOption = League & {
 
 export type LiveLeagueData = {
   players: Player[];
+  modelPlayers: Player[];
   matches: Match[];
   mmrHistory: MmrHistory[];
 };
@@ -66,36 +73,28 @@ export async function loadMyLeagues(supabase: SupabaseClient, user: User): Promi
   }));
 }
 
-export async function loadLeagueData(supabase: SupabaseClient, leagueId: number, matchLimit = 160): Promise<LiveLeagueData> {
-  const [playersResult, matchesResult, historyResult] = await Promise.all([
-    supabase
-      .from("players")
-      .select("id,name,display_name,mmr,matches_played,wins,draws,losses,win_streak,lose_streak,fitness")
-      .eq("league_id", leagueId)
-      .eq("is_active", 1)
-      .order("mmr", { ascending: false }),
-    supabase
-      .from("matches")
-      .select("id,date,team_a,team_b,score,result,processed")
-      .eq("league_id", leagueId)
-      .order("date", { ascending: false })
-      .limit(matchLimit),
-    supabase
-      .from("mmr_history")
+export async function loadLeagueData(supabase: SupabaseClient, leagueId: number, _matchLimit = 160): Promise<LiveLeagueData> {
+  // Analytical inputs are complete; each screen applies its own visible-list limit.
+  const [players, matches, mmrHistory, stats, highlights] = await Promise.all([
+    loadAllPages<Player>((from, to) => supabase.from("players")
+      .select("id,name,display_name,mmr,matches_played,wins,draws,losses,win_streak,lose_streak,fitness,position,is_active")
+      .eq("league_id", leagueId).order("mmr", { ascending: false }).order("id").range(from, to)),
+    loadAllPages<Match>((from, to) => supabase.from("matches")
+      .select("id,date,team_a,team_b,score,result,processed,review_note")
+      .eq("league_id", leagueId).eq("processed", 1).order("date", { ascending: false }).order("id", { ascending: false }).range(from, to)),
+    loadAllPages<MmrHistory>((from, to) => supabase.from("mmr_history")
       .select("id,player_id,match_id,date,mmr_before,mmr_after")
-      .eq("league_id", leagueId)
-      .order("date", { ascending: true })
+      .eq("league_id", leagueId).order("date").order("id").range(from, to)),
+    loadAllPages<MatchStatRow>((from, to) => supabase.from("match_stats")
+      .select("match_id,player_name,goals,assists").eq("league_id", leagueId).order("id").range(from, to))
+      .catch(error => { console.warn("Player statistics unavailable", error.message); return []; }),
+    loadAllPages<HighlightMomentRow>((from, to) => supabase.from("highlight_moments")
+      .select("match_id,player_name,timestamp_sec,label,type,special_tag,goal_tag,assist_tag,save_tag,save_importance")
+      .eq("league_id", leagueId).order("id").range(from, to))
+      .catch(error => { console.warn("Player highlights unavailable", error.message); return []; })
   ]);
-
-  if (playersResult.error) throw new Error(playersResult.error.message);
-  if (matchesResult.error) throw new Error(matchesResult.error.message);
-  if (historyResult.error) throw new Error(historyResult.error.message);
-
-  return {
-    players: (playersResult.data || []) as Player[],
-    matches: (matchesResult.data || []) as Match[],
-    mmrHistory: (historyResult.data || []) as MmrHistory[]
-  };
+  const completed = new Set(matches.map(m => m.id));
+  return { players: attachStyleProfiles(players.filter(p => p.is_active === 1), stats.filter(r => completed.has(r.match_id!)), highlights.filter(r => completed.has(r.match_id!))), modelPlayers: players, matches, mmrHistory };
 }
 
 export function selectedLeagueFromStorage(leagues: LeagueOption[]) {

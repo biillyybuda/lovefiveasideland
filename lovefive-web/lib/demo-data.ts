@@ -1,5 +1,12 @@
 import { getSupabase } from "./supabase";
+import {
+  attachStyleProfiles,
+  type HighlightMomentRow,
+  type MatchStatRow,
+  type PlayerStyleProfile
+} from "./player-style-profiles";
 import { chemistryScoreFor, rivalryScoreFor } from "./relationship-scoring";
+import { loadAllPages } from "./pagination";
 
 export type League = {
   id: number;
@@ -19,6 +26,10 @@ export type Player = {
   win_streak: number | null;
   lose_streak: number | null;
   fitness: string | null;
+  initial_mmr?: number | null;
+  is_active?: number;
+  position?: string | null;
+  style_profile?: PlayerStyleProfile | null;
 };
 
 export type Match = {
@@ -29,6 +40,9 @@ export type Match = {
   score: string | null;
   result: string | null;
   processed: number | null;
+  review_note?: string | null;
+  selection_source?: "committee" | "app" | "adjusted_app" | "unknown";
+  selection_snapshot?: Record<string, unknown> | null;
 };
 
 export type MmrHistory = {
@@ -69,10 +83,9 @@ export function splitTeam(value: string | null | undefined): string[] {
 }
 
 export function scoreParts(score: string | null | undefined): [number, number] | null {
-  const parts = String(score || "").split(/[-:]/).map((part) => Number(part.trim()));
-  if (parts.length !== 2 || parts.some((part) => Number.isNaN(part))) {
-    return null;
-  }
+  const match = /^\s*(\d{1,3})\s*[-:]\s*(\d{1,3})\s*$/.exec(String(score ?? ""));
+  if (!match) return null;
+  const parts = [Number(match[1]), Number(match[2])];
   return [parts[0], parts[1]];
 }
 
@@ -127,52 +140,42 @@ export async function getDemoLeague(): Promise<League> {
   return league as League;
 }
 
-export async function getDemoPlayers(leagueId: number): Promise<Player[]> {
+export async function getDemoPlayers(leagueId: number, includeArchived = false): Promise<Player[]> {
   const supabase = getSupabase();
-  const { data, error } = await supabase
-    .from("players")
-    .select("id,name,display_name,mmr,matches_played,wins,draws,losses,win_streak,lose_streak,fitness")
-    .eq("league_id", leagueId)
-    .eq("is_active", 1)
-    .order("mmr", { ascending: false });
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  return (data || []) as Player[];
+  const [players, stats, highlights, matches] = await Promise.all([
+    loadAllPages<Player>((from, to) => {
+      let query = supabase.from("players")
+        .select("id,name,display_name,mmr,matches_played,wins,draws,losses,win_streak,lose_streak,fitness,position,is_active")
+        .eq("league_id", leagueId);
+      if (!includeArchived) query = query.eq("is_active", 1);
+      return query.order("mmr", { ascending: false }).order("id").range(from, to);
+    }),
+    loadAllPages<MatchStatRow>((from, to) => supabase.from("match_stats")
+      .select("match_id,player_name,goals,assists").eq("league_id", leagueId).order("id").range(from, to))
+      .catch(error => { console.warn("Player statistics unavailable", error.message); return []; }),
+    loadAllPages<HighlightMomentRow>((from, to) => supabase.from("highlight_moments")
+      .select("match_id,player_name,timestamp_sec,label,type,special_tag,goal_tag,assist_tag,save_tag,save_importance")
+      .eq("league_id", leagueId).order("id").range(from, to))
+      .catch(error => { console.warn("Player highlights unavailable", error.message); return []; }),
+    getDemoMatches(leagueId)
+  ]);
+  const completed = new Set(matches.map(m => m.id));
+  return attachStyleProfiles(players, stats.filter(r => completed.has(r.match_id!)), highlights.filter(r => completed.has(r.match_id!)));
 }
 
-export async function getDemoMatches(leagueId: number, limit = 12): Promise<Match[]> {
+export async function getDemoMatches(leagueId: number, _displayLimit?: number): Promise<Match[]> {
   const supabase = getSupabase();
-  const { data, error } = await supabase
-    .from("matches")
-    .select("id,date,team_a,team_b,score,result,processed")
-    .eq("league_id", leagueId)
-    .eq("processed", 1)
-    .order("date", { ascending: false })
-    .limit(limit);
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  return (data || []) as Match[];
+  return loadAllPages<Match>((from, to) => supabase.from("matches")
+    .select("id,date,team_a,team_b,score,result,processed,review_note")
+    .eq("league_id", leagueId).eq("processed", 1)
+    .order("date", { ascending: false }).order("id", { ascending: false }).range(from, to));
 }
 
 export async function getDemoMmrHistory(leagueId: number): Promise<MmrHistory[]> {
   const supabase = getSupabase();
-  const { data, error } = await supabase
-    .from("mmr_history")
+  return loadAllPages<MmrHistory>((from, to) => supabase.from("mmr_history")
     .select("id,player_id,match_id,date,mmr_before,mmr_after")
-    .eq("league_id", leagueId)
-    .order("date", { ascending: true });
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  return (data || []) as MmrHistory[];
+    .eq("league_id", leagueId).order("date").order("id").range(from, to));
 }
 
 export async function getDemoSummary() {

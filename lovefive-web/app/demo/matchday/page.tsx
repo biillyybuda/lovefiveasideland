@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 export default async function DemoMatchdayPage() {
   const league = await getDemoLeague();
-  const [players, matches] = await Promise.all([getDemoPlayers(league.id), getDemoMatches(league.id, 80)]);
+  const [players, matches] = await Promise.all([getDemoPlayers(league.id, true), getDemoMatches(league.id, 80)]);
 
   return (
     <AppShell active="matchday">
@@ -17,7 +17,7 @@ export default async function DemoMatchdayPage() {
         </div>
       </div>
 
-      <InteractiveMatchday players={players} matches={matches} />
+      <InteractiveMatchday leagueKey={`demo-${league.id}`} players={players.filter(p => p.is_active === 1)} modelPlayers={players} matches={matches} />
     </AppShell>
   );
 }

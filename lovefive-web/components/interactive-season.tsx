@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import {
-  buildPlayerSummaries,
   duoChemistry,
   formatTeam,
   formatUkDate,
@@ -18,37 +17,8 @@ import {
   type PlayerSummary
 } from "@/lib/demo-data";
 import { weightedFormScore } from "@/lib/form-engine";
-import { applyPeriodMmr, calculateMatchMmrUpdates, STARTING_MMR } from "@/lib/mmr-engine";
-
-type Quarter = "full" | "ytd" | "q1" | "q2" | "q3" | "q4";
+import { quarters, getPeriod, inPeriod, previousComparisonPeriod, playerSummariesForPeriod, mvpRace, improvedRace, recordPoints, recordLabel, signed, type Quarter } from "@/lib/season-awards";
 type SeasonSortKey = "mmr" | "played" | "record" | "goalDiff" | "mmrChange" | "player";
-type ImprovementRow = {
-  key: string;
-  label: string;
-  value: number;
-  detail?: string;
-};
-type AwardStat = {
-  label: string;
-  value: string;
-  detail: string;
-};
-type MvpRow = ImprovementRow & {
-  player: PlayerSummary;
-  stats: AwardStat[];
-};
-type ImprovedRow = ImprovementRow & {
-  stats: AwardStat[];
-};
-
-const quarters: Array<{ value: Quarter; label: string; start: string; end: string }> = [
-  { value: "full", label: "Full year", start: "01-01", end: "12-31" },
-  { value: "ytd", label: "Year to date", start: "01-01", end: "latest" },
-  { value: "q1", label: "Jan-Mar", start: "01-01", end: "03-31" },
-  { value: "q2", label: "Apr-Jun", start: "04-01", end: "06-30" },
-  { value: "q3", label: "Jul-Sep", start: "07-01", end: "09-30" },
-  { value: "q4", label: "Oct-Dec", start: "10-01", end: "12-31" }
-];
 
 export function InteractiveSeason({
   players,
@@ -71,32 +41,54 @@ export function InteractiveSeason({
     () => matches.filter((match) => inPeriod(match.date, period.start, period.end)),
     [matches, period]
   );
-  const periodSummaries = useMemo(() => {
-    const base = buildPlayerSummaries(players, periodMatches);
-    const withSeasonMmr = applyPeriodMmr(base, mmrHistory, season === "all" || quarter !== "full" ? "all" : season);
-    return withSeasonMmr.map((player) => {
-      const change = periodMmrChange(mmrHistory, player.id, period.start, period.end);
-      return change
-        ? { ...player, periodMmrStart: change.start, periodMmrEnd: change.end, periodMmrChange: Math.round(change.end - change.start) }
-        : player;
-    });
-  }, [mmrHistory, period.end, period.start, periodMatches, players, quarter, season]);
+  const periodSummaries = useMemo(
+    () => playerSummariesForPeriod(
+      players,
+      periodMatches,
+      mmrHistory,
+      period.start,
+      period.end,
+      season === "all" || quarter !== "full" ? "all" : season
+    ),
+    [mmrHistory, period.end, period.start, periodMatches, players, quarter, season]
+  );
+  const previousImprovementPeriod = useMemo(
+    () => previousComparisonPeriod(season, quarter, matches, period),
+    [matches, period, quarter, season]
+  );
+  const previousPeriodMatches = useMemo(
+    () => previousImprovementPeriod
+      ? matches.filter((match) => inPeriod(match.date, previousImprovementPeriod.start, previousImprovementPeriod.end))
+      : [],
+    [matches, previousImprovementPeriod]
+  );
+  const previousPeriodSummaries = useMemo(
+    () => previousImprovementPeriod
+      ? playerSummariesForPeriod(
+        players,
+        previousPeriodMatches,
+        mmrHistory,
+        previousImprovementPeriod.start,
+        previousImprovementPeriod.end,
+        quarter === "full" ? previousImprovementPeriod.season : "all"
+      )
+      : [],
+    [mmrHistory, players, previousImprovementPeriod, previousPeriodMatches, quarter]
+  );
 
-  const activeSummaries = periodSummaries.filter((player) => Number(player.matches_played || 0) > 0);
+  const activeSummaries = useMemo(
+    () => periodSummaries.filter((player) => Number(player.matches_played || 0) > 0),
+    [periodSummaries]
+  );
   const mvpRows = useMemo(() => mvpRace(periodSummaries, periodMatches).slice(0, 5), [periodMatches, periodSummaries]);
   const bestFormRun = useMemo(() => findBestFormRun(activeSummaries), [activeSummaries]);
-  const improved: ImprovedRow[] = [...activeSummaries]
-    .filter((player) => player.periodMmrChange !== null && Number(player.matches_played || 0) >= minimumAwardMatches(periodMatches.length))
-    .sort((a, b) => Number(b.periodMmrChange || 0) - Number(a.periodMmrChange || 0))
-    .slice(0, 5)
-    .map((player) => ({
-      key: String(player.id),
-      label: player.label,
-      value: Number(player.periodMmrChange || 0),
-      detail: improvementDetail(player),
-      stats: improvementStats(player)
-    }));
-  const improvedSubtitle = "Ranked by period MMR gain";
+  const improvedRaceResult = useMemo(
+    () => improvedRace(activeSummaries, periodMatches, previousPeriodSummaries, previousPeriodMatches, previousImprovementPeriod, quarter),
+    [activeSummaries, periodMatches, previousImprovementPeriod, previousPeriodMatches, previousPeriodSummaries, quarter]
+  );
+  const improved = improvedRaceResult.rows;
+  const improvedTitle = improvedRaceResult.title;
+  const improvedSubtitle = improvedRaceResult.subtitle;
   const attendanceRows = [...activeSummaries]
     .map((player) => ({ player, pct: Math.round((Number(player.matches_played || 0) / Math.max(periodMatches.length, 1)) * 100) }))
     .sort((a, b) => b.pct - a.pct || Number(b.player.matches_played || 0) - Number(a.player.matches_played || 0));
@@ -171,6 +163,7 @@ export function InteractiveSeason({
         <div className="season-kpi-card"><span>Draws</span><strong>{drawCount}</strong><small>shared points</small></div>
       </div>
 
+      <p className="muted">Awards use the established season rating and public MMR history. Matchday strength and uncertainty do not add or remove award points.</p>
       <section className="season-awards-grid">
         <AwardCard title="MVP" main={topMvp?.label || "-"} detail={topMvp ? `${topMvp.value} MVP score` : ""} />
         <AwardCard
@@ -178,7 +171,7 @@ export function InteractiveSeason({
           main={bestFormRun?.player.label || "-"}
           detail={bestFormRun ? `${bestFormRun.form.join(" ")} from ${formatUkDate(bestFormRun.startDate)} to ${formatUkDate(bestFormRun.endDate)}` : ""}
         />
-        <AwardCard title="Most improved" main={topImproved?.label || "-"} detail={topImproved ? `${signed(topImproved.value)} MMR` : ""} />
+        <AwardCard title={improvedTitle} main={topImproved?.label || "-"} detail={topImproved ? `${signed(topImproved.value)} ${topImproved.unit}` : ""} />
         <AwardCard
           title="Attendance"
           main={topAttendance.length ? topAttendance.map((row) => row.player.label).join(", ") : "-"}
@@ -229,7 +222,7 @@ export function InteractiveSeason({
 
         <div className="panel">
           <div className="section-subhead">
-            <strong>Most improved</strong>
+            <strong>{improvedTitle}</strong>
             <span>{improvedSubtitle}</span>
           </div>
           <div className="mvp-card-list">
@@ -238,7 +231,7 @@ export function InteractiveSeason({
                 <div className="mvp-profile-head">
                   <span>{index + 1}</span>
                   <strong>{player.label}</strong>
-                  <em title={player.detail}>{signed(player.value)}</em>
+                  <em title={player.detail}>{signed(player.value)} {player.unit}</em>
                 </div>
                 <div className="mvp-stat-grid">
                   {player.stats.map((stat) => (
@@ -389,45 +382,6 @@ function RelationshipPanel({
   );
 }
 
-function getPeriod(season: string, quarter: Quarter, matches: Match[]) {
-  if (season === "all") {
-    return { start: null, end: null, label: "All seasons" };
-  }
-  const row = quarters.find((item) => item.value === quarter) || quarters[0];
-  const end = row.value === "ytd" ? latestMatchDateForSeason(matches, season) || `${season}-12-31` : `${season}-${row.end}`;
-  return {
-    start: `${season}-${row.start}`,
-    end,
-    label: `${season} - ${row.label}`
-  };
-}
-
-function latestMatchDateForSeason(matches: Match[], season: string) {
-  return matches
-    .map((match) => String(match.date || "").slice(0, 10))
-    .filter((date) => date.startsWith(`${season}-`))
-    .sort((a, b) => b.localeCompare(a))[0] || null;
-}
-
-function inPeriod(date: string | null | undefined, start: string | null, end: string | null) {
-  const value = String(date || "").slice(0, 10);
-  if (!value) return false;
-  if (start && value < start) return false;
-  if (end && value > end) return false;
-  return true;
-}
-
-function periodMmrChange(history: MmrHistory[], playerId: number, start: string | null, end: string | null) {
-  const rows = history
-    .filter((row) => row.player_id === playerId && inPeriod(row.date, start, end))
-    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || Number(a.id || 0) - Number(b.id || 0));
-  if (!rows.length) return null;
-  return {
-    start: Number(rows[0].mmr_before || 1000),
-    end: Number(rows[rows.length - 1].mmr_after || rows[0].mmr_before || 1000)
-  };
-}
-
 function biggestDefeats(matches: Match[], players: Player[]) {
   const nameMap = makeNameMap(players);
   return matches
@@ -448,111 +402,6 @@ function biggestDefeats(matches: Match[], players: Player[]) {
     .filter((row): row is { date: string | null; score: string; margin: number; loser: string; teamA: string; teamB: string } => Boolean(row && row.margin > 0))
     .sort((a, b) => b.margin - a.margin)
     .slice(0, 5);
-}
-
-function mvpRace(players: PlayerSummary[], matches: Match[]): MvpRow[] {
-  const matchCount = matches.length;
-  const minimumMatches = minimumAwardMatches(matchCount);
-  const eligible = players.filter((player) => Number(player.matches_played || 0) >= minimumMatches);
-  const seasonRatings = seasonOnlyRatings(players, matches);
-
-  return eligible
-    .map((player) => {
-      const played = Number(player.matches_played || 0);
-      const appearances = matchCount ? played / matchCount : 0;
-      const seasonRating = seasonRatings.get(player.id) ?? STARTING_MMR;
-      const components = {
-        rating: ratingPoints(seasonRating),
-        games: Math.round(appearances * 20)
-      };
-      const score = components.rating + components.games;
-
-      return {
-        key: String(player.id),
-        label: player.label,
-        value: score,
-        detail: mvpDetail(player, seasonRating),
-        player,
-        stats: mvpStats(player, components, seasonRating)
-      };
-    })
-    .sort((a, b) => b.value - a.value || (seasonRatings.get(b.player.id) ?? STARTING_MMR) - (seasonRatings.get(a.player.id) ?? STARTING_MMR) || Number(b.player.matches_played || 0) - Number(a.player.matches_played || 0) || recordPoints(b.player) - recordPoints(a.player));
-}
-
-function seasonOnlyRatings(players: PlayerSummary[], matches: Match[]) {
-  const seedRatings = seededSeasonStarts(players);
-  const state = new Map<number, Player>(
-    players.map((player) => [
-      player.id,
-      {
-        ...player,
-        mmr: seedRatings.get(player.id) ?? STARTING_MMR
-      }
-    ])
-  );
-  const nameLookup = new Map<string, Player>();
-
-  for (const player of state.values()) {
-    addPlayerLookup(nameLookup, player.name, player);
-    addPlayerLookup(nameLookup, player.display_name, player);
-  }
-
-  const orderedMatches = [...matches]
-    .filter((match) => scoreParts(match.score))
-    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || a.id - b.id);
-
-  for (const match of orderedMatches) {
-    const teamA = resolveSeasonTeam(match.team_a, nameLookup);
-    const teamB = resolveSeasonTeam(match.team_b, nameLookup);
-    if (!teamA.length || !teamB.length) continue;
-
-    const updates = calculateMatchMmrUpdates({
-      teamA,
-      teamB,
-      match,
-      players: Array.from(state.values())
-    });
-
-    for (const update of updates) {
-      const player = state.get(update.player.id);
-      if (player) player.mmr = Math.round(update.after);
-    }
-  }
-
-  return new Map(Array.from(state.values()).map((player) => [player.id, Number(player.mmr || STARTING_MMR)]));
-}
-
-function seededSeasonStarts(players: PlayerSummary[]) {
-  const involved = players.filter((player) => Number(player.matches_played || 0) > 0);
-  const startValues = involved.map((player) => finiteOr(player.periodMmrStart, STARTING_MMR));
-  const leagueAverage = startValues.reduce((sum, value) => sum + value, 0) / Math.max(startValues.length, 1);
-
-  return new Map(
-    players.map((player) => {
-      const start = finiteOr(player.periodMmrStart, finiteOr(player.mmr, STARTING_MMR));
-      const seeded = STARTING_MMR + (start - leagueAverage) * 0.35;
-      return [player.id, Math.round(seeded)] as const;
-    })
-  );
-}
-
-function addPlayerLookup(lookup: Map<string, Player>, value: string | null | undefined, player: Player) {
-  const key = normalizeName(value);
-  if (key && !lookup.has(key)) lookup.set(key, player);
-}
-
-function resolveSeasonTeam(value: string | null | undefined, lookup: Map<string, Player>) {
-  const seen = new Set<number>();
-  const team: Player[] = [];
-
-  for (const name of splitTeam(value)) {
-    const player = lookup.get(normalizeName(name));
-    if (!player || seen.has(player.id)) continue;
-    team.push(player);
-    seen.add(player.id);
-  }
-
-  return team;
 }
 
 function periodToForget(players: PlayerSummary[]) {
@@ -627,31 +476,6 @@ function compareSeasonValue(a: PlayerSummary, b: PlayerSummary, sortKey: SeasonS
   return recordPoints(a) - recordPoints(b);
 }
 
-function recordPoints(player: PlayerSummary) {
-  return Number(player.wins || 0) * 3 + Number(player.draws || 0);
-}
-
-function recordLabel(player: PlayerSummary) {
-  return `${Number(player.wins || 0)}-${Number(player.draws || 0)}-${Number(player.losses || 0)}`;
-}
-
-function mvpDetail(player: PlayerSummary, seasonRating: number) {
-  return `${player.matches_played} games played, ${Math.round(seasonRating)} season-only rating, ${recordLabel(player)} record`;
-}
-
-function mvpStats(
-  player: PlayerSummary,
-  components: { rating: number; games: number },
-  seasonRating: number
-): AwardStat[] {
-  return [
-    { label: "Season rating", value: String(Math.round(seasonRating)), detail: `${components.rating}/80 pts` },
-    { label: "Games", value: String(player.matches_played || 0), detail: `${components.games}/20 pts` },
-    { label: "Rolling change", value: signed(Number(player.periodMmrChange || 0)), detail: "context" },
-    { label: "Record", value: recordLabel(player), detail: "W-D-L" }
-  ];
-}
-
 function periodRating(player: PlayerSummary) {
   if (player.periodMmrStart !== null && player.periodMmrEnd !== null) {
     return 1000 + (Number(player.periodMmrEnd || 0) - Number(player.periodMmrStart || 0));
@@ -659,45 +483,7 @@ function periodRating(player: PlayerSummary) {
   return Number(player.mmr || 1000);
 }
 
-function improvementStats(player: PlayerSummary): AwardStat[] {
-  const start = player.periodMmrStart === null ? null : Math.round(Number(player.periodMmrStart || 0));
-  const end = player.periodMmrEnd === null ? null : Math.round(Number(player.periodMmrEnd || 0));
-  return [
-    { label: "Games", value: String(player.matches_played || 0), detail: "qualified" },
-    { label: "Start", value: start === null ? "-" : String(start), detail: "MMR" },
-    { label: "Now", value: end === null ? "-" : String(end), detail: "MMR" },
-    { label: "Gain", value: signed(Number(player.periodMmrChange || 0)), detail: "MMR" },
-    { label: "Record", value: recordLabel(player), detail: "W-D-L" }
-  ];
-}
-
-function improvementDetail(player: PlayerSummary) {
-  const start = player.periodMmrStart === null ? null : Math.round(Number(player.periodMmrStart || 0));
-  const end = player.periodMmrEnd === null ? null : Math.round(Number(player.periodMmrEnd || 0));
-  const movement = start !== null && end !== null ? `${start} to ${end} MMR` : `${signed(Number(player.periodMmrChange || 0))} MMR`;
-  return `${player.matches_played} apps, ${movement}, ${recordLabel(player)}`;
-}
-
-function minimumAwardMatches(matchCount: number) {
-  if (matchCount <= 3) return 1;
-  return Math.max(3, Math.ceil(matchCount * 0.25));
-}
-
-function ratingPoints(rating: number) {
-  const scaled = ((rating - 900) / 200) * 80;
-  return Math.round(Math.max(0, Math.min(80, scaled)));
-}
-
-function finiteOr(value: number | null | undefined, fallback: number) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
 function sortMarker(current: SeasonSortKey, direction: "asc" | "desc", key: SeasonSortKey) {
   if (current !== key) return "";
   return direction === "asc" ? "^" : "v";
-}
-
-function signed(value: number) {
-  return `${value > 0 ? "+" : ""}${Math.round(value)}`;
 }

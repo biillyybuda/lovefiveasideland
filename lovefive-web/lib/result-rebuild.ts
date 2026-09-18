@@ -1,260 +1,116 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { normalizeName, scoreParts, splitTeam, type Match, type Player } from "./demo-data";
+import { scoreParts, type Match, type MmrHistory, type Player } from "./demo-data";
 import { calculateMatchMmrUpdates, scoreToResult, STARTING_MMR } from "./mmr-engine";
+import { balanceRatings, compareMatches, matchDay, replayBalance, resolveLineup, BALANCE_CONFIG, BALANCE_VERSION } from "./balance-model";
 
-const PAGE_SIZE = 500;
-const PLAYER_SELECT = "id,name,display_name,mmr,matches_played,wins,draws,losses,win_streak,lose_streak,fitness";
-const MATCH_SELECT = "id,date,team_a,team_b,score,result,processed";
+export const DRAFT_MATCH_ID = Number.MAX_SAFE_INTEGER;
+export type RatingAdjustment = { player_id: number; delta: number; after_date: string; after_match_id: number };
+export type RatingWorkspace = { token: string; players: Player[]; matches: Match[]; history: MmrHistory[]; adjustments: RatingAdjustment[] };
+export type LeagueChange = { action: "rebuild" } | { action: "add"; match: Match } |
+  { action: "edit"; match: Match; original: Match } | { action: "delete"; match: Match };
+export type ResultRebuildSummary = { processedMatches: number; playersUpdated: number; historyRows: number };
 
-type RebuildPlayer = Player & {
-  mmr: number;
-  matches_played: number;
-  wins: number;
-  draws: number;
-  losses: number;
-  win_streak: number;
-  lose_streak: number;
-};
-
-type MmrHistoryInsert = {
-  league_id: number;
-  player_id: number;
-  match_id: number;
-  date: string | null;
-  mmr_before: number;
-  mmr_after: number;
-};
-
-export type ResultRebuildSummary = {
-  processedMatches: number;
-  playersUpdated: number;
-  historyRows: number;
-};
+function ratingDatabaseError(error: { code?: string; message: string }) {
+  const missingObject = ["PGRST202", "PGRST204", "PGRST205", "42P01", "42703", "42883"].includes(error.code || "");
+  const ratingObject = /\b(rating_runs|rating_workspace|commit_rating_run|rating_adjustments|balance_model_states|initial_mmr|selection_source)\b/.test(error.message);
+  if (missingObject && ratingObject) {
+    return new Error("Result saving needs a database update. Apply supabase/migrations/20260908080902_mmr_v2_foundation.sql " +
+      "to the Supabase project configured for this website, then refresh and retry. See Database setup in lovefive-web/README.md.");
+  }
+  return new Error(error.code === "40001" ? "The league changed while saving. Refresh and try again." : error.message);
+}
 
 export function normaliseScoreText(value: string | null | undefined) {
   const parsed = scoreParts(value);
   return parsed ? `${parsed[0]}-${parsed[1]}` : "";
 }
-
 export function resultLabelFromScore(value: string | null | undefined) {
-  const result = scoreToResult({ score: value || "", result: "" });
-  return result === "DRAW" ? "Draw" : result;
+  const parsed = scoreParts(value);
+  if (!parsed) throw new Error("Enter a complete score, such as 10-8.");
+  return parsed[0] === parsed[1] ? "Draw" : parsed[0] > parsed[1] ? "A" : "B";
 }
 
-export async function recalculateLeagueResults(
-  supabase: SupabaseClient,
-  leagueId: number
-): Promise<ResultRebuildSummary> {
-  const [players, matches] = await Promise.all([
-    loadAllPlayers(supabase, leagueId),
-    loadAllProcessedMatches(supabase, leagueId)
-  ]);
+export async function loadRatingWorkspace(supabase: SupabaseClient, leagueId: number): Promise<RatingWorkspace> {
+  const { data, error } = await supabase.rpc("rating_workspace", { p_league_id: leagueId });
+  if (error) throw new Error(`Could not load the rating workspace: ${ratingDatabaseError(error).message}`);
+  if (!data?.token || !Array.isArray(data.players) || !Array.isArray(data.matches)) throw new Error("Incomplete rating workspace.");
+  return data as RatingWorkspace;
+}
 
-  const playerState = initialisePlayerState(players);
-  const nameLookup = buildNameLookup(playerState);
-  const historyRows: MmrHistoryInsert[] = [];
-  const matchResultUpdates: Array<{ id: number; result: string }> = [];
+export function applyLeagueChange(matches: Match[], change: LeagueChange): Match[] {
+  if (change.action === "rebuild") return [...matches];
+  if (change.action === "add") return [...matches, { ...change.match, id: DRAFT_MATCH_ID }];
+  const old = matches.find(m => m.id === change.match.id);
+  const expected = change.action === "edit" ? change.original : change.match;
+  if (!old || ["date", "team_a", "team_b", "score", "processed"].some(k => old[k as keyof Match] !== expected[k as keyof Match]) ||
+    (old.review_note || "") !== (expected.review_note || "")) {
+    throw new Error("This match has changed since you opened it. Refresh and try again.");
+  }
+  return change.action === "delete" ? matches.filter(m => m.id !== old.id) : matches.map(m => m.id === old.id ? { ...m, ...change.match } : m);
+}
 
-  for (const match of matches) {
-    if (!scoreParts(match.score)) {
-      throw new Error(`${matchLabel(match)} has an invalid score.`);
+/** Pure replay: no writes until both models and every lineup have been validated. */
+export function buildLeagueRatings(workspace: RatingWorkspace, matches = workspace.matches) {
+  const players = workspace.players.map(p => ({ ...p, mmr: p.initial_mmr ?? STARTING_MMR,
+    matches_played: 0, wins: 0, draws: 0, losses: 0, win_streak: 0, lose_streak: 0 }));
+  if (players.some(p => !Number.isFinite(p.mmr))) throw new Error("Invalid starting rating.");
+  const byId = new Map(players.map(p => [p.id, p]));
+  const adjustments = [...workspace.adjustments].sort((a, b) => a.after_date.localeCompare(b.after_date) || a.after_match_id - b.after_match_id);
+  let adjustmentIndex = 0;
+  function applyAdjustments(before?: Match) {
+    while (adjustmentIndex < adjustments.length) {
+      const row = adjustments[adjustmentIndex];
+      if (before && compareMatches({ date: row.after_date, id: row.after_match_id }, before) >= 0) break;
+      const player = byId.get(row.player_id);
+      if (!player || !Number.isFinite(row.delta)) throw new Error("Invalid manual rating adjustment.");
+      player.mmr += row.delta;
+      adjustmentIndex++;
     }
-
+  }
+  const history: Array<{ player_id: number; match_id: number; date: string | null; mmr_before: number; mmr_after: number }> = [];
+  const processed = [...matches].filter(m => m.processed === 1).sort(compareMatches);
+  for (const match of processed) {
+    matchDay(match.date || "");
+    if (!scoreParts(match.score)) throw new Error(`Match ${match.id} has an invalid score.`);
+    applyAdjustments(match);
+    const { a, b } = resolveLineup(match, players);
     const result = scoreToResult(match);
-    const resultLabel = result === "DRAW" ? "Draw" : result;
-    if (String(match.result || "").trim() !== resultLabel) {
-      matchResultUpdates.push({ id: match.id, result: resultLabel });
-    }
-
-    const teamA = resolveTeam(match, "A", nameLookup);
-    const teamB = resolveTeam(match, "B", nameLookup);
-    if (!teamA.length || !teamB.length) {
-      throw new Error(`${matchLabel(match)} needs players on both teams.`);
-    }
-
-    const updates = calculateMatchMmrUpdates({
-      teamA,
-      teamB,
-      match: { ...match, result: resultLabel },
-      players: Array.from(playerState.values())
-    });
-
+    const updates = calculateMatchMmrUpdates({ teamA: a.map(id => byId.get(id)!), teamB: b.map(id => byId.get(id)!), match, players });
     for (const update of updates) {
-      const player = playerState.get(update.player.id);
-      if (!player) continue;
-
-      const after = Math.round(update.after);
-      const outcome = outcomeForSide(result, update.team);
-      player.mmr = after;
-      player.matches_played += 1;
-      player.wins += outcome === "W" ? 1 : 0;
-      player.draws += outcome === "D" ? 1 : 0;
-      player.losses += outcome === "L" ? 1 : 0;
-      player.win_streak = outcome === "W" ? player.win_streak + 1 : 0;
-      player.lose_streak = outcome === "L" ? player.lose_streak + 1 : 0;
-
-      historyRows.push({
-        league_id: leagueId,
-        player_id: player.id,
-        match_id: match.id,
-        date: match.date,
-        mmr_before: Math.round(update.before),
-        mmr_after: after
-      });
+      const p = byId.get(update.player.id)!;
+      const win = result === update.team, draw = result === "DRAW", loss = !win && !draw;
+      p.mmr = Math.round(update.after);
+      p.matches_played++; p.wins += Number(win); p.draws += Number(draw); p.losses += Number(loss);
+      p.win_streak = win ? p.win_streak + 1 : 0; p.lose_streak = loss ? p.lose_streak + 1 : 0;
+      history.push({ player_id: p.id, match_id: match.id, date: match.date, mmr_before: update.before, mmr_after: p.mmr });
     }
   }
-
-  await updateStoredMatchResults(supabase, leagueId, matchResultUpdates);
-  await replaceMmrHistory(supabase, leagueId, historyRows);
-  await updatePlayers(supabase, leagueId, Array.from(playerState.values()));
-
-  return {
-    processedMatches: matches.length,
-    playersUpdated: playerState.size,
-    historyRows: historyRows.length
-  };
+  applyAdjustments();
+  const shadow = replayBalance(workspace.players, processed);
+  return { players, history, shadow: { ...shadow, ratings: balanceRatings(shadow.state), config: BALANCE_CONFIG },
+    summary: { processedMatches: processed.length, playersUpdated: players.length, historyRows: history.length } };
 }
 
-async function loadAllPlayers(supabase: SupabaseClient, leagueId: number): Promise<Player[]> {
-  const rows: Player[] = [];
-  for (let from = 0; ; from += PAGE_SIZE) {
-    const { data, error } = await supabase
-      .from("players")
-      .select(PLAYER_SELECT)
-      .eq("league_id", leagueId)
-      .order("name", { ascending: true })
-      .range(from, from + PAGE_SIZE - 1);
-
-    if (error) throw new Error(error.message);
-    const chunk = (data || []) as Player[];
-    rows.push(...chunk);
-    if (chunk.length < PAGE_SIZE) break;
+export async function saveLeagueChange(supabase: SupabaseClient, leagueId: number, change: LeagueChange, requestId: string): Promise<ResultRebuildSummary> {
+  // A response can be lost after a successful delete/edit. Check the request before
+  // applying the change again locally, then let the RPC verify its exact payload.
+  const prior = await supabase.from("rating_runs").select("id").eq("league_id", leagueId).eq("id", requestId).maybeSingle();
+  if (prior.error) throw ratingDatabaseError(prior.error);
+  if (prior.data) {
+    const retry = await supabase.rpc("commit_rating_run", { p_league_id: leagueId, p_expected_token: "", p_request_id: requestId,
+      p_change: change, p_calculated: {}, p_model_version: BALANCE_VERSION });
+    if (retry.error) throw ratingDatabaseError(retry.error);
+    return retry.data as ResultRebuildSummary;
   }
-  return rows;
+  const workspace = await loadRatingWorkspace(supabase, leagueId);
+  const calculated = buildLeagueRatings(workspace, applyLeagueChange(workspace.matches, change));
+  const { data, error } = await supabase.rpc("commit_rating_run", {
+    p_league_id: leagueId, p_expected_token: workspace.token, p_request_id: requestId,
+    p_change: change, p_calculated: calculated, p_model_version: BALANCE_VERSION
+  });
+  if (error) throw ratingDatabaseError(error);
+  return data as ResultRebuildSummary;
 }
-
-async function loadAllProcessedMatches(supabase: SupabaseClient, leagueId: number): Promise<Match[]> {
-  const rows: Match[] = [];
-  for (let from = 0; ; from += PAGE_SIZE) {
-    const { data, error } = await supabase
-      .from("matches")
-      .select(MATCH_SELECT)
-      .eq("league_id", leagueId)
-      .eq("processed", 1)
-      .order("date", { ascending: true })
-      .order("id", { ascending: true })
-      .range(from, from + PAGE_SIZE - 1);
-
-    if (error) throw new Error(error.message);
-    const chunk = (data || []) as Match[];
-    rows.push(...chunk);
-    if (chunk.length < PAGE_SIZE) break;
-  }
-  return rows;
-}
-
-function initialisePlayerState(players: Player[]) {
-  return new Map<number, RebuildPlayer>(
-    players.map((player) => [
-      player.id,
-      {
-        ...player,
-        mmr: STARTING_MMR,
-        matches_played: 0,
-        wins: 0,
-        draws: 0,
-        losses: 0,
-        win_streak: 0,
-        lose_streak: 0
-      }
-    ])
-  );
-}
-
-function buildNameLookup(players: Map<number, RebuildPlayer>) {
-  const lookup = new Map<string, RebuildPlayer>();
-  for (const player of players.values()) {
-    addNameLookup(lookup, player.name, player);
-    addNameLookup(lookup, player.display_name, player);
-  }
-  return lookup;
-}
-
-function addNameLookup(lookup: Map<string, RebuildPlayer>, value: string | null | undefined, player: RebuildPlayer) {
-  const key = normalizeName(value);
-  if (key && !lookup.has(key)) lookup.set(key, player);
-}
-
-function resolveTeam(match: Match, side: "A" | "B", lookup: Map<string, RebuildPlayer>) {
-  const team = splitTeam(side === "A" ? match.team_a : match.team_b);
-  const seen = new Set<number>();
-  const players: RebuildPlayer[] = [];
-
-  for (const rawName of team) {
-    const player = lookup.get(normalizeName(rawName));
-    if (!player) {
-      throw new Error(`${matchLabel(match)} includes ${rawName}, who is not in this league's player list.`);
-    }
-    if (!seen.has(player.id)) {
-      players.push(player);
-      seen.add(player.id);
-    }
-  }
-
-  return players;
-}
-
-function outcomeForSide(result: "A" | "B" | "DRAW", side: "A" | "B") {
-  if (result === "DRAW") return "D";
-  return result === side ? "W" : "L";
-}
-
-async function updateStoredMatchResults(
-  supabase: SupabaseClient,
-  leagueId: number,
-  updates: Array<{ id: number; result: string }>
-) {
-  for (const update of updates) {
-    const { error } = await supabase
-      .from("matches")
-      .update({ result: update.result })
-      .eq("id", update.id)
-      .eq("league_id", leagueId);
-    if (error) throw new Error(error.message);
-  }
-}
-
-async function replaceMmrHistory(supabase: SupabaseClient, leagueId: number, rows: MmrHistoryInsert[]) {
-  const { error: deleteError } = await supabase.from("mmr_history").delete().eq("league_id", leagueId);
-  if (deleteError) throw new Error(deleteError.message);
-
-  for (let index = 0; index < rows.length; index += PAGE_SIZE) {
-    const chunk = rows.slice(index, index + PAGE_SIZE);
-    const { error } = await supabase.from("mmr_history").insert(chunk);
-    if (error) throw new Error(error.message);
-  }
-}
-
-async function updatePlayers(supabase: SupabaseClient, leagueId: number, players: RebuildPlayer[]) {
-  for (const player of players) {
-    const { error } = await supabase
-      .from("players")
-      .update({
-        mmr: player.mmr,
-        matches_played: player.matches_played,
-        wins: player.wins,
-        draws: player.draws,
-        losses: player.losses,
-        win_streak: player.win_streak,
-        lose_streak: player.lose_streak
-      })
-      .eq("id", player.id)
-      .eq("league_id", leagueId);
-
-    if (error) throw new Error(error.message);
-  }
-}
-
-function matchLabel(match: Match) {
-  return `Match ${match.id}${match.date ? ` on ${match.date}` : ""}`;
+export async function recalculateLeagueResults(supabase: SupabaseClient, leagueId: number): Promise<ResultRebuildSummary> {
+  return saveLeagueChange(supabase, leagueId, { action: "rebuild" }, crypto.randomUUID());
 }

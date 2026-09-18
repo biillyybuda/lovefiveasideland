@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
 
-const nextConfig: NextConfig = {
+const nextConfig = (phase: string): NextConfig => ({
+  // Keep production checks from replacing chunks used by an open development page.
+  distDir: phase === PHASE_DEVELOPMENT_SERVER ? ".next-dev" : ".next",
   reactStrictMode: true,
   async headers() {
     return [
@@ -15,6 +18,6 @@ const nextConfig: NextConfig = {
       }
     ];
   }
-};
+});
 
 export default nextConfig;

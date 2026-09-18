@@ -4,6 +4,8 @@ import { useMemo, useState } from "react";
 import { MatchCard } from "@/components/match-card";
 import { makeNameMap, normalizeName, resultFor, scoreParts, splitTeam, type Match, type Player, type PlayerSummary } from "@/lib/demo-data";
 import { chemistryScoreFor, evidenceLabel, rivalryScoreFor } from "@/lib/relationship-scoring";
+import { PlayerHealthActivity } from "@/components/health-activity";
+import type { HealthContext } from "@/lib/health-stats";
 
 type LinkRow = {
   key: string;
@@ -25,17 +27,30 @@ export function InteractiveInsights({
   initialPlayerId,
   players,
   rawPlayers,
-  matches
+  matches,
+  selectedPlayerId,
+  onPlayerChange,
+  section = "football",
+  onSectionChange,
+  health
 }: {
   initialPlayerId?: string;
   players: PlayerSummary[];
   rawPlayers: Player[];
   matches: Match[];
+  selectedPlayerId?: number | null;
+  onPlayerChange?: (id: number | null) => void;
+  section?: "football" | "health";
+  onSectionChange?: (section: "football" | "health") => void;
+  health?: HealthContext;
 }) {
-  const [selectedId, setSelectedId] = useState(() => {
+  const [localSelectedId, setLocalSelectedId] = useState(() => {
     const raw = Number(initialPlayerId);
     return players.some((player) => player.id === raw) ? raw : null;
   });
+  const selectedId = selectedPlayerId === undefined ? localSelectedId : selectedPlayerId;
+  const setSelectedId = onPlayerChange || setLocalSelectedId;
+  const showHealth = !!health && section === "health";
   const [depth, setDepth] = useState("all");
   const nameMap = useMemo(() => makeNameMap(rawPlayers), [rawPlayers]);
   const selected = selectedId ? players.find((player) => player.id === selectedId) || null : null;
@@ -62,19 +77,26 @@ export function InteractiveInsights({
           >
             <option value="">Select a player</option>
             {players.map((player) => (
-              <option value={player.id} key={player.id}>{player.label}</option>
+              <option value={player.id} key={player.id}>{player.label}{player.is_active === 0 ? " · Archived" : ""}</option>
             ))}
           </select>
         </label>
-        <label>
+        {!showHealth && <label>
           <span>Game history</span>
           <select value={depth} onChange={(event) => setDepth(event.target.value)}>
             <option value="5">Recent 5</option>
             <option value="10">Recent 10</option>
             <option value="all">All games</option>
           </select>
-        </label>
+        </label>}
       </div>
+
+      {health && <div className="segmented" aria-label="Player insight section">
+        <button className={!showHealth ? "active" : ""} aria-pressed={!showHealth} onClick={() => onSectionChange?.("football")}>Football</button>
+        <button className={showHealth ? "active" : ""} aria-pressed={showHealth} onClick={() => onSectionChange?.("health")}>Health & Activity</button>
+      </div>}
+
+      {showHealth && health ? <PlayerHealthActivity health={health} playerId={selected?.id || null}/> : <>
 
       <section className="two-col">
         <div className="panel">
@@ -140,6 +162,7 @@ export function InteractiveInsights({
           )}
         </div>
       </section>
+      </>}
     </div>
   );
 }

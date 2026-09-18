@@ -6,9 +6,11 @@ import type { User } from "@supabase/supabase-js";
 import { InteractiveStatsHub } from "@/components/interactive-stats-hub";
 import { LiveAppShell } from "@/components/live-app-shell";
 import { getBrowserSupabase } from "@/lib/auth-client";
+import { useLeagueActivity } from "@/components/use-league-activity";
 import { type Match, type MmrHistory, type Player } from "@/lib/demo-data";
 import {
   loadLeagueData,
+  isAdminRole,
   loadMyLeagues,
   selectedLeagueFromStorage,
   type LeagueOption
@@ -22,10 +24,12 @@ export function AuthenticatedLeagueCharts() {
   const [leagues, setLeagues] = useState<LeagueOption[]>([]);
   const [leagueId, setLeagueId] = useState<number | null>(null);
   const [players, setPlayers] = useState<Player[]>([]);
+  const [activityPlayers, setActivityPlayers] = useState<Player[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
   const [mmrHistory, setMmrHistory] = useState<MmrHistory[]>([]);
   const [state, setState] = useState<LoadState>("loading");
   const [message, setMessage] = useState("");
+  const activity = useLeagueActivity(leagueId);
 
   const selectedLeague = leagues.find((league) => league.id === leagueId) || null;
 
@@ -56,6 +60,7 @@ export function AuthenticatedLeagueCharts() {
     try {
       const data = await loadLeagueData(supabase, activeLeagueId, 220);
       setPlayers(data.players);
+      setActivityPlayers(data.modelPlayers);
       setMatches(data.matches);
       setMmrHistory(data.mmrHistory);
       setState("ready");
@@ -90,7 +95,7 @@ export function AuthenticatedLeagueCharts() {
   if (state === "error" || !selectedLeague) return <main className="main"><div className="panel"><h1>Charts could not load</h1><p className="muted">{message}</p></div></main>;
 
   return (
-    <LiveAppShell active="charts" league={selectedLeague}>
+    <LiveAppShell active="charts" league={selectedLeague} playersCount={players.length} matchesCount={matches.length}>
       <div className="page-head">
         <div>
           <div className="eyebrow">Live League</div>
@@ -98,13 +103,16 @@ export function AuthenticatedLeagueCharts() {
         </div>
       </div>
       <InteractiveStatsHub
+        key={selectedLeague.id}
         initialPlayer={params.get("player") || undefined}
+        initialPlayerSection={params.get("section") || undefined}
         initialSeason={params.get("season") || undefined}
         initialView={params.get("view") || undefined}
         reportBasePath="/app/matches"
         players={players}
         matches={matches}
         mmrHistory={mmrHistory}
+        health={{ leagueId: selectedLeague.id, players: activityPlayers, load: activity.state, reload: activity.reload, canEdit: isAdminRole(selectedLeague.role) }}
       />
     </LiveAppShell>
   );
