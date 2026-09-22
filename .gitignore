@@ -24,3 +24,6 @@ Archive/
 objects.py
 sizes.txt
 sizes_sorted.txt
+
+# Local Supabase CLI state
+supabase/.temp/
