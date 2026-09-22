@@ -1,6 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { isLeagueMatch } from "@/lib/competition";
+import { useCompetition, CompetitionControl } from "@/components/competition-control";
+import { InteractiveStatsHub } from "@/components/interactive-stats-hub";
 import {
   duoChemistry,
   formatTeam,
@@ -20,7 +23,7 @@ import { weightedFormScore } from "@/lib/form-engine";
 import { quarters, getPeriod, inPeriod, previousComparisonPeriod, playerSummariesForPeriod, mvpRace, improvedRace, recordPoints, recordLabel, signed, type Quarter } from "@/lib/season-awards";
 type SeasonSortKey = "mmr" | "played" | "record" | "goalDiff" | "mmrChange" | "player";
 
-export function InteractiveSeason({
+export function LeagueSeasonReview({
   players,
   matches,
   mmrHistory
@@ -486,4 +489,14 @@ function periodRating(player: PlayerSummary) {
 function sortMarker(current: SeasonSortKey, direction: "asc" | "desc", key: SeasonSortKey) {
   if (current !== key) return "";
   return direction === "asc" ? "^" : "v";
+}
+
+export function InteractiveSeason(props: { players: Player[]; historicalPlayers?: Player[]; matches: Match[]; mmrHistory: MmrHistory[] }) {
+  const [competition, setCompetition] = useCompetition();
+  if (competition !== "league") return <div className="interactive-stack">
+    <p className="competition-note">Official season awards use League matches only. Explore {competition === "all" ? "combined career records" : "Shield honours and records"} below.</p>
+    <InteractiveStatsHub {...props} initialCompetition={competition} />
+  </div>;
+  return <><div className="control-bar"><CompetitionControl value={competition} onChange={setCompetition}/></div>
+    <LeagueSeasonReview {...props} matches={props.matches.filter(isLeagueMatch)} /></>;
 }

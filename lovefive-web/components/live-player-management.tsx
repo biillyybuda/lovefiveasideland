@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { InteractivePlayers } from "@/components/interactive-players";
 import { getBrowserSupabase } from "@/lib/auth-client";
 import { buildPlayerSummaries, type Match, type Player } from "@/lib/demo-data";
+import { selectMatches } from "@/lib/competition";
 import { canonicalName, displayPlayerName, tidyName } from "@/lib/live-data";
 
 export function LivePlayerManagement({
@@ -26,7 +27,7 @@ export function LivePlayerManagement({
   const [editMmr, setEditMmr] = useState(1000);
   const [editFitness, setEditFitness] = useState("Medium");
   const [message, setMessage] = useState("");
-  const summaries = useMemo(() => buildPlayerSummaries(players, matches), [matches, players]);
+  const summaries = useMemo(() => buildPlayerSummaries(players, selectMatches(matches)), [matches, players]);
   const selected = players.find((player) => player.id === editingId) || null;
 
   function startEdit(player: Player) {

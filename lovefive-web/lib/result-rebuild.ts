@@ -2,16 +2,18 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { scoreParts, type Match, type MmrHistory, type Player } from "./demo-data";
 import { calculateMatchMmrUpdates, scoreToResult, STARTING_MMR } from "./mmr-engine";
 import { balanceRatings, compareMatches, matchDay, replayBalance, resolveLineup, BALANCE_CONFIG, BALANCE_VERSION } from "./balance-model";
+import { COMPETITION_POLICY, isLeagueMatch, matchCompetition } from "./competition";
 
 export const DRAFT_MATCH_ID = Number.MAX_SAFE_INTEGER;
 export type RatingAdjustment = { player_id: number; delta: number; after_date: string; after_match_id: number };
 export type RatingWorkspace = { token: string; players: Player[]; matches: Match[]; history: MmrHistory[]; adjustments: RatingAdjustment[] };
 export type LeagueChange = { action: "rebuild" } | { action: "add"; match: Match } |
   { action: "edit"; match: Match; original: Match } | { action: "delete"; match: Match };
-export type ResultRebuildSummary = { processedMatches: number; playersUpdated: number; historyRows: number };
+export type ResultRebuildSummary = { processedMatches: number; ratedMatches: number; playersUpdated: number; historyRows: number };
 
 function ratingDatabaseError(error: { code?: string; message: string }) {
   const missingObject = ["PGRST202", "PGRST204", "PGRST205", "42P01", "42703", "42883"].includes(error.code || "");
+  if (missingObject && /commit_competition_rating_run|competition/.test(error.message)) return new Error("Shield support needs the MMR Immunity Shield database migration. No result has been saved.");
   const ratingObject = /\b(rating_runs|rating_workspace|commit_rating_run|rating_adjustments|balance_model_states|initial_mmr|selection_source)\b/.test(error.message);
   if (missingObject && ratingObject) {
     return new Error("Result saving needs a database update. Apply supabase/migrations/20260908080902_mmr_v2_foundation.sql " +
@@ -43,6 +45,7 @@ export function applyLeagueChange(matches: Match[], change: LeagueChange): Match
   const old = matches.find(m => m.id === change.match.id);
   const expected = change.action === "edit" ? change.original : change.match;
   if (!old || ["date", "team_a", "team_b", "score", "processed"].some(k => old[k as keyof Match] !== expected[k as keyof Match]) ||
+    matchCompetition(old) !== matchCompetition(expected) ||
     (old.review_note || "") !== (expected.review_note || "")) {
     throw new Error("This match has changed since you opened it. Refresh and try again.");
   }
@@ -74,6 +77,8 @@ export function buildLeagueRatings(workspace: RatingWorkspace, matches = workspa
     if (!scoreParts(match.score)) throw new Error(`Match ${match.id} has an invalid score.`);
     applyAdjustments(match);
     const { a, b } = resolveLineup(match, players);
+    // Shield results are validated and train balancing, but never touch public rating history or league counters.
+    if (!isLeagueMatch(match)) continue;
     const result = scoreToResult(match);
     const updates = calculateMatchMmrUpdates({ teamA: a.map(id => byId.get(id)!), teamB: b.map(id => byId.get(id)!), match, players });
     for (const update of updates) {
@@ -87,24 +92,25 @@ export function buildLeagueRatings(workspace: RatingWorkspace, matches = workspa
   }
   applyAdjustments();
   const shadow = replayBalance(workspace.players, processed);
-  return { players, history, shadow: { ...shadow, ratings: balanceRatings(shadow.state), config: BALANCE_CONFIG },
-    summary: { processedMatches: processed.length, playersUpdated: players.length, historyRows: history.length } };
+  return { competitionPolicy: COMPETITION_POLICY, players, history, shadow: { ...shadow, ratings: balanceRatings(shadow.state), config: BALANCE_CONFIG },
+    summary: { processedMatches: processed.length, ratedMatches: processed.filter(isLeagueMatch).length, playersUpdated: players.length, historyRows: history.length } };
 }
 
 export async function saveLeagueChange(supabase: SupabaseClient, leagueId: number, change: LeagueChange, requestId: string): Promise<ResultRebuildSummary> {
+  if (change.action !== "rebuild") change = { ...change, match: { ...change.match, competition: matchCompetition(change.match) } };
   // A response can be lost after a successful delete/edit. Check the request before
   // applying the change again locally, then let the RPC verify its exact payload.
   const prior = await supabase.from("rating_runs").select("id").eq("league_id", leagueId).eq("id", requestId).maybeSingle();
   if (prior.error) throw ratingDatabaseError(prior.error);
   if (prior.data) {
-    const retry = await supabase.rpc("commit_rating_run", { p_league_id: leagueId, p_expected_token: "", p_request_id: requestId,
+    const retry = await supabase.rpc("commit_competition_rating_run", { p_league_id: leagueId, p_expected_token: "", p_request_id: requestId,
       p_change: change, p_calculated: {}, p_model_version: BALANCE_VERSION });
     if (retry.error) throw ratingDatabaseError(retry.error);
     return retry.data as ResultRebuildSummary;
   }
   const workspace = await loadRatingWorkspace(supabase, leagueId);
   const calculated = buildLeagueRatings(workspace, applyLeagueChange(workspace.matches, change));
-  const { data, error } = await supabase.rpc("commit_rating_run", {
+  const { data, error } = await supabase.rpc("commit_competition_rating_run", {
     p_league_id: leagueId, p_expected_token: workspace.token, p_request_id: requestId,
     p_change: change, p_calculated: calculated, p_model_version: BALANCE_VERSION
   });

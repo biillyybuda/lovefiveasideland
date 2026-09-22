@@ -1,4 +1,5 @@
 import { loadAllPages } from "./pagination";
+import { loadCompletedMatches } from "./match-loader";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import type { League, Match, MmrHistory, Player } from "@/lib/demo-data";
 import {
@@ -79,9 +80,7 @@ export async function loadLeagueData(supabase: SupabaseClient, leagueId: number,
     loadAllPages<Player>((from, to) => supabase.from("players")
       .select("id,name,display_name,mmr,matches_played,wins,draws,losses,win_streak,lose_streak,fitness,position,is_active")
       .eq("league_id", leagueId).order("mmr", { ascending: false }).order("id").range(from, to)),
-    loadAllPages<Match>((from, to) => supabase.from("matches")
-      .select("id,date,team_a,team_b,score,result,processed,review_note")
-      .eq("league_id", leagueId).eq("processed", 1).order("date", { ascending: false }).order("id", { ascending: false }).range(from, to)),
+    loadCompletedMatches(supabase, leagueId),
     loadAllPages<MmrHistory>((from, to) => supabase.from("mmr_history")
       .select("id,player_id,match_id,date,mmr_before,mmr_after")
       .eq("league_id", leagueId).order("date").order("id").range(from, to)),
@@ -94,7 +93,8 @@ export async function loadLeagueData(supabase: SupabaseClient, leagueId: number,
       .catch(error => { console.warn("Player highlights unavailable", error.message); return []; })
   ]);
   const completed = new Set(matches.map(m => m.id));
-  return { players: attachStyleProfiles(players.filter(p => p.is_active === 1), stats.filter(r => completed.has(r.match_id!)), highlights.filter(r => completed.has(r.match_id!))), modelPlayers: players, matches, mmrHistory };
+  const enriched = attachStyleProfiles(players, stats.filter(r => completed.has(r.match_id!)), highlights.filter(r => completed.has(r.match_id!)));
+  return { players: enriched.filter(p => p.is_active === 1), modelPlayers: enriched, matches, mmrHistory };
 }
 
 export function selectedLeagueFromStorage(leagues: LeagueOption[]) {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { CompetitionLink as Link } from "@/components/competition-control";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 import { AccountLeagueOnboarding } from "@/components/account-league-onboarding";
@@ -32,15 +32,21 @@ import {
   type LeagueOption
 } from "@/lib/live-data";
 
+import { CompetitionControl, useCompetition } from "@/components/competition-control";
+import { selectMatches, competitionLabels } from "@/lib/competition";
+import { ShieldRecords } from "@/components/shield-records";
+
 type LoadState = "auth" | "select" | "loading" | "ready" | "empty" | "error";
 
 export function AuthenticatedLeagueHome() {
   const router = useRouter();
+  const [competition, setCompetition] = useCompetition();
   const params = useSearchParams();
   const [user, setUser] = useState<User | null>(null);
   const [leagues, setLeagues] = useState<LeagueOption[]>([]);
   const [leagueId, setLeagueId] = useState<number | null>(null);
   const [players, setPlayers] = useState<Player[]>([]);
+  const [modelPlayers, setModelPlayers] = useState<Player[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
   const [mmrHistory, setMmrHistory] = useState<MmrHistory[]>([]);
   const [state, setState] = useState<LoadState>("auth");
@@ -84,6 +90,7 @@ export function AuthenticatedLeagueHome() {
     try {
       const data = await loadLeagueData(supabase, activeLeagueId, 160);
       setPlayers(data.players);
+      setModelPlayers(data.modelPlayers);
       setMatches(data.matches);
       setMmrHistory(data.mmrHistory);
       setState("ready");
@@ -124,6 +131,7 @@ export function AuthenticatedLeagueHome() {
   }, [leagueId, loadSelectedLeague]);
 
   function chooseLeague(id: number) {
+    setCompetition("league");
     setLeagueId(id);
   }
 
@@ -137,8 +145,8 @@ export function AuthenticatedLeagueHome() {
   const selectedSeason = rawSeason && seasons.includes(rawSeason) ? rawSeason : "all";
   const seasonLabel = selectedSeason === "all" ? "All time" : selectedSeason;
   const scopedMatches = useMemo(
-    () => selectedSeason === "all" ? matches : matches.filter((match) => String(match.date || "").startsWith(selectedSeason)),
-    [matches, selectedSeason]
+    () => selectMatches(matches, competition, selectedSeason),
+    [matches, selectedSeason, competition]
   );
   const nameMap = useMemo(() => makeNameMap(players), [players]);
   const playerSummaries = useMemo(
@@ -159,7 +167,6 @@ export function AuthenticatedLeagueHome() {
     [playerSummaries]
   );
   const latestMatch = scopedMatches[0];
-  const firstMatch = [...matches].sort((a, b) => String(a.date).localeCompare(String(b.date)))[0];
   const scopedFirstMatch = [...scopedMatches].sort((a, b) => String(a.date).localeCompare(String(b.date)))[0];
   const highScoring = scopedMatches
     .map((match) => ({ match, total: scoreParts(match.score)?.reduce((sum, value) => sum + value, 0) || 0 }))
@@ -169,7 +176,7 @@ export function AuthenticatedLeagueHome() {
   const goalDiffLeader = [...playerSummaries]
     .filter((player) => player.allMatches.length > 0)
     .sort((a, b) => b.goalDiff - a.goalDiff)[0];
-  const mostImproved = findMostImprovedPlayer(playerSummaries, mmrHistory, seasons, selectedSeason);
+  const mostImproved = competition === "immunity_shield" ? null : findMostImprovedPlayer(applyPeriodMmr(buildPlayerSummaries(players, selectMatches(matches, "league", selectedSeason)), mmrHistory, selectedSeason), mmrHistory, seasons, selectedSeason);
   const unbeatenLeader = [...playerSummaries]
     .filter((player) => player.allMatches.length > 0)
     .sort((a, b) => streakLength(b, "W") - streakLength(a, "W"))[0];
@@ -181,7 +188,7 @@ export function AuthenticatedLeagueHome() {
   const playersHref = `/app/charts?view=player${chartsSeason}#player-insights`;
   const latestReportHref = latestMatch ? `/app/matches/${latestMatch.id}` : matchHistoryHref;
   const tickerItems = [
-    rankedPlayers[0] ? `Current MVP: ${rankedPlayers[0].label} (${Math.round(rankedPlayers[0].mmr || 0)} MMR)` : "",
+    competition !== "immunity_shield" && rankedPlayers[0] ? `League rating leader: ${rankedPlayers[0].label} (${Math.round(rankedPlayers[0].mmr || 0)} MMR)` : "",
     mostImproved ? `Breakout: ${mostImproved.player.label} ${signed(mostImproved.improvementScore)} vs previous seasons` : "",
     unbeatenLeader ? `Hot streak: ${unbeatenLeader.label} ${streakLength(unbeatenLeader, "W")} unbeaten wins in form` : "",
     roughRunLeader && streakLength(roughRunLeader, "L") > 1 ? `Needs a bounce: ${roughRunLeader.label} ${streakLength(roughRunLeader, "L")} losses in form` : "",
@@ -250,10 +257,11 @@ export function AuthenticatedLeagueHome() {
   return (
     <LiveAppShell active="overview" league={selectedLeague} matchesCount={matches.length} playersCount={players.length}>
       <StatsTicker items={tickerItems} />
+      <div className="control-bar"><CompetitionControl value={competition} onChange={setCompetition}/></div>
 
       <div className="home-hero">
         <div className="home-hero-copy">
-          <div className="eyebrow">League Home</div>
+          <div className="eyebrow">{competitionLabels[competition]} Home</div>
           <h1>Home</h1>
           <div className="home-hero-meta">
             <span>{players.length} players</span>
@@ -283,7 +291,7 @@ export function AuthenticatedLeagueHome() {
       <div className="stats-grid">
         <Stat label="Players" value={players.length} />
         <Stat label="Matches" value={scopedMatches.length} />
-        <Stat label="First match" value={formatUkDate(scopedFirstMatch?.date || firstMatch?.date)} />
+        <Stat label="First match" value={formatUkDate(scopedFirstMatch?.date)} />
         <Stat label="Latest match" value={formatUkDate(latestMatch?.date)} />
       </div>
 
@@ -299,11 +307,11 @@ export function AuthenticatedLeagueHome() {
           {latestMatch ? <MatchCard match={latestMatch} nameMap={nameMap} /> : <p className="muted">No matches yet.</p>}
         </div>
 
-        <div className="panel feature-panel">
+        {competition === "immunity_shield" ? <ShieldRecords players={buildPlayerSummaries(modelPlayers, scopedMatches)}/> : <div className="panel feature-panel">
           <div className="section-title-row">
             <div>
               <span>Players</span>
-              <h2>Power Rankings</h2>
+              <h2>League MMR Rankings</h2>
             </div>
             {admin ? <Link className="mini-link" href="/app/admin-tools/player-management">Manage players</Link> : null}
           </div>
@@ -321,7 +329,7 @@ export function AuthenticatedLeagueHome() {
               </div>
             ))}
           </div>
-        </div>
+        </div>}
       </section>
 
       <section className="home-support-grid">
@@ -371,7 +379,7 @@ export function AuthenticatedLeagueHome() {
         <div className="panel">
           <div className="section-title-row">
             <div>
-              <span>League Leaders</span>
+              <span>{competitionLabels[competition]} Leaders</span>
               <h2>Key Stats</h2>
             </div>
           </div>
@@ -381,15 +389,15 @@ export function AuthenticatedLeagueHome() {
               <strong>{mostPlayed ? displayName(mostPlayed) : "-"}</strong>
               <small>{mostPlayed ? `${mostPlayed.allMatches.length} matches` : ""}</small>
             </div>
-            <div>
-              <span>Most improved MMR</span>
+            {competition !== "immunity_shield" && <div>
+              <span>Most improved league MMR</span>
               <strong>{mostImproved?.player.label || "-"}</strong>
               <small>
                 {mostImproved
                   ? `${signed(mostImproved.currentGain)} in ${mostImproved.season}, ${signed(mostImproved.improvementScore)} vs prior average`
                   : ""}
               </small>
-            </div>
+            </div>}
             <div>
               <span>Best goal swing</span>
               <strong>{goalDiffLeader?.label || "-"}</strong>

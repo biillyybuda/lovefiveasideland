@@ -50,10 +50,14 @@ export function attachStyleProfiles<T extends { name: string }>(
   players: T[],
   matchStats: MatchStatRow[],
   highlights: HighlightMomentRow[]
-): Array<T & { style_profile?: PlayerStyleProfile | null }> {
+): Array<T & { style_profile?: PlayerStyleProfile | null; style_source: { stats: MatchStatRow[]; highlights: HighlightMomentRow[] } }> {
   const profiles = buildStyleProfiles(matchStats, highlights);
   return players.map((player) => ({
     ...player,
+    style_source: {
+      stats: matchStats.filter(row => cleanName(row.player_name) === cleanName(player.name)),
+      highlights: highlights.filter(row => cleanName(row.player_name) === cleanName(player.name))
+    },
     style_profile: profiles.get(cleanName(player.name)) || null
   }));
 }

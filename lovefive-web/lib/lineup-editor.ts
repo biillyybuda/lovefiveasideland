@@ -1,5 +1,6 @@
 import { displayName, scoreParts, type Match, type Player } from "./demo-data";
 import { matchDay, resolveLineup } from "./balance-model";
+import { matchCompetition, competitionLabels, type Competition } from "./competition";
 
 export type Role = "GK" | "DF" | "MF" | "ST";
 export type Side = "blue" | "red";
@@ -17,11 +18,12 @@ export const FORMATIONS: Record<FormationId, { label: string; slots: Slot[]; edg
 export type TeamLineup = { formation: FormationId; ids: number[] };
 export type PositionLock = { side: Side; role: Role };
 export type LineupDraft = {
+  competition?: Competition;
   version: 1; date: string; blue: TeamLineup; red: TeamLineup;
   locks: Record<number, PositionLock>; preferences: Record<number, Role>;
   autoFormations: Record<Side, boolean>;
 };
-export type LineupSeed = { date: string; blue: number[]; red: number[]; revision: number };
+export type LineupSeed = { date: string; blue: number[]; red: number[]; revision: number; competition?: Competition };
 export type LinkColour = "green" | "amber" | "red";
 export const LINK_COLOURS: Record<LinkColour, string> = { green: "#39e765", amber: "#ffc442", red: "#ff3d59" };
 export type PlayerWins = { games: number; wins: number };
@@ -84,6 +86,7 @@ export function savedRole(value: string | null | undefined): Role | undefined {
 export function validateDraft(value: unknown, players: Player[]): LineupDraft {
   if (!value || typeof value !== "object") throw new Error("Choose ten players first.");
   const draft = value as LineupDraft;
+  matchCompetition(draft);
   if (draft.version !== 1) throw new Error("This lineup draft is no longer supported.");
   matchDay(draft.date);
   const available = new Set(players.filter(p => p.is_active !== 0).map(p => p.id));
@@ -165,8 +168,8 @@ export function suggestTeam(draft: LineupDraft, side: Side, players: Player[], c
   return candidates[0].team;
 }
 
-export function initialLineup(date: string, blue: number[], red: number[], players: Player[], chemistry: Chemistry): LineupDraft {
-  const draft: LineupDraft = { version: 1, date, blue: { formation: "1-1-2-1", ids: blue }, red: { formation: "1-1-2-1", ids: red }, locks: {}, preferences: {}, autoFormations: { blue: true, red: true } };
+export function initialLineup(date: string, blue: number[], red: number[], players: Player[], chemistry: Chemistry, competition: Competition = "league"): LineupDraft {
+  const draft: LineupDraft = { version: 1, competition, date, blue: { formation: "1-1-2-1", ids: blue }, red: { formation: "1-1-2-1", ids: red }, locks: {}, preferences: {}, autoFormations: { blue: true, red: true } };
   validateDraft(draft, players);
   for (const side of SIDES) draft[side] = suggestTeam(draft, side, players, chemistry);
   return draft;
@@ -193,5 +196,5 @@ export function shieldName(name: string) {
 
 export function lineupText(draft: LineupDraft, players: Player[]) {
   const byId = new Map(players.map(p => [p.id, p]));
-  return `LOVE FIVE · ${draft.date}\n\n${SIDES.map(side => `${side === "blue" ? "🔵 BLUE" : "🔴 RED"} TEAM · ${FORMATIONS[draft[side].formation].label}\n${draft[side].ids.map((id, index) => `${FORMATIONS[draft[side].formation].slots[index].role}: ${displayName(byId.get(id)!)}`).join("\n")}`).join("\n\n")}`;
+  return `LOVE FIVE · ${competitionLabels[matchCompetition(draft)]} · ${draft.date}${draft.competition === "immunity_shield" ? " · MMR protected; a draw awards no Shield" : ""}\n\n${SIDES.map(side => `${side === "blue" ? "🔵 BLUE" : "🔴 RED"} TEAM · ${FORMATIONS[draft[side].formation].label}\n${draft[side].ids.map((id, index) => `${FORMATIONS[draft[side].formation].slots[index].role}: ${displayName(byId.get(id)!)}`).join("\n")}`).join("\n\n")}`;
 }

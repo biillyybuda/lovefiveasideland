@@ -8,6 +8,12 @@ export function LeagueInfoContent({
   return (
     <section className="info-grid">
       <details open>
+        <summary>League &amp; MMR Immunity Shield</summary>
+        <p>League fixtures count towards public MMR and league season awards. Each Shield fixture is a standalone final: the winning players each earn one Shield. A draw stays a draw and nobody wins a Shield.</p>
+        <p>Use League, MMR Immunity Shield or All competitions beside the season filter to explore records, partnerships and activity. Both competitions help balance future teams. Shield results never change league MMR or league awards.</p>
+        <p>Admins choose the competition when recording a result. The competition controls what counts, regardless of the day it was played.</p>
+      </details>
+      <details open>
         <summary>{liveLeagueName || "What Love Five does"}</summary>
         <p>
           Love Five turns weekly five-a-side results into a league hub. It tracks match history, player ratings,

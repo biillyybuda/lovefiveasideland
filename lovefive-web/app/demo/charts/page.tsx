@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 export default async function DemoChartsPage({
   searchParams
 }: {
-  searchParams?: Promise<{ view?: string | string[]; season?: string | string[]; player?: string | string[] }>;
+  searchParams?: Promise<{ competition?: string | string[]; view?: string | string[]; season?: string | string[]; player?: string | string[] }>;
 }) {
   const params = searchParams ? await searchParams : {};
   const initialView = valueFromParam(params.view);
@@ -15,7 +15,7 @@ export default async function DemoChartsPage({
   const initialPlayer = valueFromParam(params.player);
   const league = await getDemoLeague();
   const [players, matches, mmrHistory] = await Promise.all([
-    getDemoPlayers(league.id),
+    getDemoPlayers(league.id, true),
     getDemoMatches(league.id, 80),
     getDemoMmrHistory(league.id)
   ]);
@@ -30,7 +30,9 @@ export default async function DemoChartsPage({
       </div>
 
       <InteractiveStatsHub
-        players={players}
+        initialCompetition={valueFromParam(params.competition)}
+        players={players.filter(p => p.is_active !== 0)}
+        historicalPlayers={players}
         matches={matches}
         mmrHistory={mmrHistory}
         initialPlayer={initialPlayer}

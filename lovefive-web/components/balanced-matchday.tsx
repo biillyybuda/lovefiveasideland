@@ -5,6 +5,7 @@ import { displayName, formatTeam, formatUkDate, makeNameMap, normalizeName, spli
 import { buildMatchdayBalance, matchdayOptions } from "@/lib/matchday-balance";
 import { BalanceMatchdayCard } from "@/components/balance-matchday-card";
 import { matchdayOutlook } from "@/lib/matchday-outlook";
+import { competitionLabels, type Competition } from "@/lib/competition";
 import type { LineupSeed } from "@/lib/lineup-editor";
 
 function today() {
@@ -20,6 +21,7 @@ export function BalancedMatchday({ players, selected, matches, locksA, locksB, o
   onReuseMemory: (match: Match) => void;
   onEditLineup?: (seed: LineupSeed) => void;
 }) {
+  const [competition, setCompetition] = useState<Competition>("league");
   const [date, setDate] = useState(today);
   const [chosenKey, setChosenKey] = useState("");
   const [showAll, setShowAll] = useState(false);
@@ -42,7 +44,7 @@ export function BalancedMatchday({ players, selected, matches, locksA, locksB, o
   async function copyTeams() {
     if (!chosen) return;
     try {
-      await navigator.clipboard.writeText(`Love Five · ${formatUkDate(date)}\n\n🔵 Blue team (Team A): ${chosen.teamA.map(displayName).join(", ")}\n\n🔴 Red team (Team B): ${chosen.teamB.map(displayName).join(", ")}\n\n${matchdayOutlook(chosen.prediction)}\nEstimated results: Blue win ${percent(chosen.prediction.win)} · Draw ${percent(chosen.prediction.draw)} · Red win ${percent(chosen.prediction.loss)}\nFinish within 2 goals: ${percent(chosen.prediction.close)} (draw, or either team wins by 1–2).`);
+      await navigator.clipboard.writeText(`Love Five · ${competitionLabels[competition]} · ${formatUkDate(date)}${competition === "immunity_shield" ? " · MMR protected; a draw awards no Shield" : ""}\n\n🔵 Blue team (Team A): ${chosen.teamA.map(displayName).join(", ")}\n\n🔴 Red team (Team B): ${chosen.teamB.map(displayName).join(", ")}\n\n${matchdayOutlook(chosen.prediction)}\nEstimated results: Blue win ${percent(chosen.prediction.win)} · Draw ${percent(chosen.prediction.draw)} · Red win ${percent(chosen.prediction.loss)}\nFinish within 2 goals: ${percent(chosen.prediction.close)} (draw, or either team wins by 1–2).`);
       setCopyMessage(selectionKey);
     } catch { setCopyMessage("Copy unavailable. You can select and copy the team names below."); }
   }
@@ -50,9 +52,10 @@ export function BalancedMatchday({ players, selected, matches, locksA, locksB, o
   return <div className="interactive-stack balance-default">
     <section className="panel">
       <div className="panel-title-row"><div><span className="stat-label">Team balancing</span><h2>Strength + uncertainty</h2></div>
+        <label><span>Fixture competition</span><select value={competition} onChange={event => setCompetition(event.target.value as Competition)}><option value="league">League</option><option value="immunity_shield">MMR Immunity Shield</option></select></label>
         <label><span>Match date</span><input type="date" value={date} onChange={event => { setDate(event.target.value); setChosenKey(""); }} /></label>
       </div>
-      <p className="muted">Teams are picked using what past scorelines tell us about each player, including how certain those estimates are. Public MMR and season award scores keep their existing rules.</p>
+      <p className="muted">League and Shield results both help balance teams. Public MMR and season awards use league results only. {competition === "immunity_shield" ? "This fixture has MMR immunity; a draw awards no Shield." : "This is a rated league fixture."}</p>
       {model ? <small className="muted">Based on {model.history.length} completed games on or before {formatUkDate(date)}. A close game means a draw or a win by one or two goals.</small> : null}
       {calculation.error ? <p role="alert">{calculation.error} Check the date or ask a league admin to correct the match history.</p> : null}
     </section>
@@ -85,9 +88,9 @@ export function BalancedMatchday({ players, selected, matches, locksA, locksB, o
         </aside>
       </section>
 
-      {chosen ? <BalanceMatchdayCard option={chosen} model={model} players={players} date={date}
+      {chosen ? <BalanceMatchdayCard competition={competition} option={chosen} model={model} players={players} date={date}
         rank={options.indexOf(chosen) + 1} onCopy={copyTeams}
-        onEditLineup={() => onEditLineup?.({ date, blue: chosen.teamA.map(p => p.id), red: chosen.teamB.map(p => p.id), revision: Date.now() })}
+        onEditLineup={() => onEditLineup?.({ competition, date, blue: chosen.teamA.map(p => p.id), red: chosen.teamB.map(p => p.id), revision: Date.now() })}
         copyStatus={copyMessage === selectionKey ? "Teams copied." : copyMessage.startsWith("Copy unavailable") ? copyMessage : ""} /> : null}
 
       <details className="panel"><summary>Matchday Memory</summary><p className="muted">Reuse an old game&apos;s shape. Returning players keep their old side, replacing your current locks; the strength and uncertainty model fills the spaces.</p>

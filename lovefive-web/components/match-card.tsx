@@ -1,5 +1,6 @@
-import Link from "next/link";
+import { CompetitionLink as Link } from "@/components/competition-control";
 import { formatTeam, formatUkDate, normalizeName, type Match } from "@/lib/demo-data";
+import { competitionLabels, matchCompetition, isLeagueMatch } from "@/lib/competition";
 
 export function MatchCard({
   match,
@@ -14,7 +15,8 @@ export function MatchCard({
 }) {
   const teamA = formatTeam(match.team_a, nameMap);
   const teamB = formatTeam(match.team_b, nameMap);
-  const [scoreA, scoreB] = String(match.score || "-").split("-");
+  const [scoreA, scoreB] = String(match.score || "-").split(/[-:]/);
+  const drawn = /^\s*\d+\s*[-:]\s*\d+\s*$/.test(match.score || "") && Number(scoreA) === Number(scoreB);
   const highlightKey = normalizeName(highlightPlayer);
 
   function playerPill(player: string, side: "a" | "b") {
@@ -30,11 +32,12 @@ export function MatchCard({
     <article className="match-card">
       <div className="match-card-top">
         <div>
-          <span>Matchday</span>
+          <span>{competitionLabels[matchCompetition(match)]}</span>
           <strong>{formatUkDate(match.date)}</strong>
         </div>
         <div className="score-badge">{match.result || "Result"}</div>
       </div>
+      {!isLeagueMatch(match) && <p className="competition-note">MMR protected{drawn ? " · Draw — no Shield awarded" : ""}</p>}
       <div className="scoreline scoreboard">
         <span className="team-a">Team A</span>
         <strong>{scoreA || "-"}</strong>

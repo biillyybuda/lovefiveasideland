@@ -5837,3 +5837,21 @@ tr:last-child td {
   .balance-matchday-card .matchday-player-card { grid-template-columns: minmax(0, 1fr); }
   .balance-matchday-card .form-dots { justify-content: flex-start; }
 }
+
+/* Shared competition controls and honours use the existing app palette. */
+.competition-control { display: grid; gap: 7px; min-width: 0; }
+.competition-control select { max-width: 100%; }
+.competition-stats, .competition-stats > * { min-width: 0; }
+.competition-stats > .stats-toolbar { grid-template-columns: minmax(0, 1fr) minmax(0, 250px) minmax(0, 220px); }
+.competition-stats .stats-toolbar > * { min-width: 0; }
+.competition-stats > .segmented { max-width: 100%; }
+.competition-note { color: var(--muted); font-size: .875rem; line-height: 1.55; }
+.shield-records { min-width: 0; }
+.shield-records h2 { margin-top: 6px; }
+.shield-records table { min-width: 580px; width: 100%; }
+.shield-records td, .shield-records th { padding: 10px 12px; text-align: left; }
+.shield-records .table-wrap { overflow-x: auto; }
+@media (max-width: 700px) {
+  .competition-stats > .stats-toolbar { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .competition-control { width: 100%; }
+}

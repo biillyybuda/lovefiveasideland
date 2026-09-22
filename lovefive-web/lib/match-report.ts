@@ -1,6 +1,7 @@
 import { displayName, formatUkDate, resultFor, scoreParts, splitTeam, type Match, type MmrHistory, type Player } from "./demo-data";
 import { compareMatches, replayBalance, type BalancePrediction } from "./balance-model";
 import { seasonAwardSnapshot, signed } from "./season-awards";
+import { matchCompetition, competitionLabels, isLeagueMatch, shieldWins } from "./competition";
 import { groupsForLeague, type LeagueGroup } from "./league-groups";
 
 type Side = "A" | "B";
@@ -58,8 +59,11 @@ export function buildMatchReport({ match, matches, players, mmrHistory, awardPla
   const canonical = (value: string | null) => splitTeam(value).map(name => lookup.get(key(name))?.name || name).join(", ");
   const canonicalMatch = (m: Match) => ({ ...m, team_a: canonical(m.team_a), team_b: canonical(m.team_b) });
   match = canonicalMatch(match);
-  const all = [...new Map([...matches, match].filter(completedReportMatch).filter(m => compareMatches(m, match) <= 0)
+  const archive = [...new Map([...matches, match].filter(completedReportMatch).filter(m => compareMatches(m, match) <= 0)
     .map(m => [m.id, canonicalMatch(m)])).values()].sort(compareMatches);
+  const competition = matchCompetition(match);
+  const shield = !isLeagueMatch(match);
+  const all = archive.filter(m => matchCompetition(m) === competition);
   const previous = all.filter(m => compareMatches(m, match) < 0);
   const season = match.date!.slice(0, 4);
   const year = all.filter(m => m.date!.startsWith(`${season}-`));
@@ -78,6 +82,10 @@ export function buildMatchReport({ match, matches, players, mmrHistory, awardPla
   const candidates: Story[] = [];
   const changes: Change[] = [];
   const add = (story: Story) => candidates.push(story);
+  if (shield) add({ key: "shield", priority: 200, label: "MMR Immunity Shield",
+    title: winner ? `Team ${winner} win the Shield` : "Draw — no Shield awarded",
+    detail: winner ? `${(winner === "A" ? teamA : teamB).join(", ")} each earn one Shield. League MMR is protected.` : "The match counts as a draw for everyone. Nobody earns a Shield and league MMR is protected.",
+    people: winner ? (winner === "A" ? teamA : teamB) : [], scope: competitionLabels[competition] });
   const beforeAwards = seasonAwardSnapshot(awardPlayers, previous, mmrHistory, season);
   const afterAwards = seasonAwardSnapshot(awardPlayers, all, mmrHistory, season);
   let climbingMvp: { name: string; rank: number } | null = null;
@@ -123,7 +131,7 @@ export function buildMatchReport({ match, matches, players, mmrHistory, awardPla
     const person = label(name), total = priorCareer.length + 1;
     let note = "";
     if (!priorCareer.length) {
-      note = "First appearance in the recorded league history";
+      note = `First appearance in the recorded ${shield ? "Shield" : "league"} history`;
       if (current === "W" && !winningNewcomer) winningNewcomer = person;
       add({ key: `first-${name}`, priority: 100, label: "First recorded appearance", title: `${person} ${current === "W" ? "starts with a win" : current === "D" ? "starts with a draw" : "makes a first appearance"}`,
         detail: `${note}${current === "W" ? `, on the winning side of a ${scoreLabel} result` : ""}.`, people: [person], scope: "Recorded career" });
@@ -135,7 +143,7 @@ export function buildMatchReport({ match, matches, players, mmrHistory, awardPla
     if (total >= 25 && total % 25 === 0) {
       note = `${ordinal(total)} recorded career appearance; ${ordinal(seasonResults.length)} of ${season}`;
       add({ key: `career-${name}`, priority: 66, label: "Career milestone", title: `${person} reaches ${total} appearances`,
-        detail: `${seasonResults.length} in ${season}. Career count covers the recorded league archive.`, people: [person], scope: "Recorded career" });
+        detail: `${seasonResults.length} in ${season}. Career count covers the recorded ${shield ? "Shield" : "league"} archive.`, people: [person], scope: "Recorded career" });
     } else if (seasonResults.length >= 10 && seasonResults.length % 10 === 0) {
       add({ key: `appearance-${name}`, priority: 47, label: "Season milestone", title: `${person}'s ${ordinal(seasonResults.length)} game of ${season}`,
         detail: `${recordText(seasonRecord)} this season.`, people: [person], scope: season });
@@ -219,18 +227,18 @@ export function buildMatchReport({ match, matches, players, mmrHistory, awardPla
   const teamBLabel = groupContexts.find(g => g.side === "B")?.teamLabel || "Team B";
   const resultLabel = winner ? `${winner === "A" ? teamALabel : teamBLabel} win` : "Draw";
   const defaultHeadline = winner ? `${winner === "A" ? teamALabel : teamBLabel} win ${scoreLabel}` : `Honours even at ${scoreLabel}`;
-  const headline = groupContexts.length ? stories.find(s => s.key.startsWith("group-"))!.headline! : winningNewcomer ? `${winningNewcomer} starts with a win${climbingMvp ? ` as ${climbingMvp.name} moves into ${rankWord(climbingMvp.rank)}` : ""}`
+  const headline = shield ? (winner ? `Team ${winner} win the MMR Immunity Shield` : `Shield draw: ${scoreLabel} — nobody wins the Shield`) : groupContexts.length ? stories.find(s => s.key.startsWith("group-"))!.headline! : winningNewcomer ? `${winningNewcomer} starts with a win${climbingMvp ? ` as ${climbingMvp.name} moves into ${rankWord(climbingMvp.rank)}` : ""}`
     : stories[0]?.title || defaultHeadline;
   const lead = winner ? `${winner === "A" ? teamALabel : teamBLabel} won ${scoreLabel}${groupContexts.length && (winner === "A" ? teamBLabel : teamALabel) !== `Team ${winner === "A" ? "B" : "A"}` ? ` against ${winner === "A" ? teamBLabel : teamALabel}` : ""}.` : `The match finished ${scoreLabel}.`;
   const summary = `${lead} ${stories.filter(s => !s.key.startsWith("group-")).slice(0, 4).map(s => {
-    if (s.key.startsWith("first-")) return `${s.people[0]} made a first appearance in the recorded league history.`;
+    if (s.key.startsWith("first-")) return `${s.people[0]} made a first appearance in the recorded ${shield ? "Shield" : "league"} history.`;
     if (s.key.startsWith("pair-")) return `${s.people.join(" and ")} secured their first win together in ${season}.`;
     return `${s.title.replace(" moves into ", " moved into ").replace(" ends a ", " ended a ").replace(" reaches ", " reached ")}.`;
   }).join(" ")}`;
   const avg = (side: Side) => { const notes = playerNotes.filter(n => n.side === side); return notes.length && notes.every(n => n.before !== null)
     ? notes.reduce((sum, n) => sum + n.before!, 0) / notes.length : null; };
   let prediction: BalancePrediction | null = null;
-  try { prediction = replayBalance(players, all).records.find(r => r.matchId === match.id)?.prediction || null; }
+  try { prediction = replayBalance(players, archive).records.find(r => r.matchId === match.id)?.prediction || null; }
   catch { /* Incomplete historical lineups cannot support a reconstructed estimate. */ }
 
   const previousMeeting = priorYear.map(m => {
@@ -245,6 +253,14 @@ export function buildMatchReport({ match, matches, players, mmrHistory, awardPla
   if (mvp) standings.push({ label: `${season} MVP leader`, name: mvp.label, value: `${mvp.value} pts`, detail: "Established season rating + attendance" });
   if (improved) standings.push({ label: `${season} ${afterAwards.improved.title.toLowerCase()}`, name: improved.label,
     value: `${signed(improved.value)} ${improved.unit}`, detail: afterAwards.improved.subtitle });
+  if (shield) {
+    for (const player of players) {
+      const before = shieldWins(player, priorYear), after = shieldWins(player, year);
+      if (after > before) changes.push({ label: `${season} Shields won`, name: displayName(player), before: String(before), after: String(after), detail: "One Shield for winning this fixture", priority: 100 });
+    }
+    const leaders = players.map(player => ({ player, wins: shieldWins(player, year) })).filter(p => p.wins > 0).sort((a,b) => b.wins-a.wins || displayName(a.player).localeCompare(displayName(b.player)));
+    standings.splice(0, standings.length, ...leaders.slice(0,5).map(({player,wins}) => ({label: `${season} Shield honours`, name: displayName(player), value: `${wins} Shields`, detail: "One honour per winning appearance"})));
+  }
   return { match, season, matchNumber: year.length, headline, summary, resultLabel, dateLabel: formatUkDate(match.date), scoreLabel,
     teamA, teamB, teamALabel, teamBLabel, highlights, stories, changes: changes.sort((a, b) => b.priority - a.priority), standings, playerNotes,
     scoreContext: { total, averageBefore, priorMatches: priorYear.length, rank, tied }, rating: { avgA: avg("A"), avgB: avg("B"), prediction },

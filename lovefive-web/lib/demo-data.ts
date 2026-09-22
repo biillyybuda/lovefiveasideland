@@ -7,6 +7,8 @@ import {
 } from "./player-style-profiles";
 import { chemistryScoreFor, rivalryScoreFor } from "./relationship-scoring";
 import { loadAllPages } from "./pagination";
+import { loadCompletedMatches } from "./match-loader";
+import { shieldWins, type Competition } from "./competition";
 
 export type League = {
   id: number;
@@ -30,10 +32,12 @@ export type Player = {
   is_active?: number;
   position?: string | null;
   style_profile?: PlayerStyleProfile | null;
+  style_source?: { stats: MatchStatRow[]; highlights: HighlightMomentRow[] };
 };
 
 export type Match = {
   id: number;
+  competition?: Competition;
   date: string | null;
   team_a: string | null;
   team_b: string | null;
@@ -55,6 +59,7 @@ export type MmrHistory = {
 };
 
 export type PlayerSummary = Player & {
+  shieldWins: number;
   label: string;
   form: string[];
   goalsFor: number;
@@ -165,10 +170,7 @@ export async function getDemoPlayers(leagueId: number, includeArchived = false):
 
 export async function getDemoMatches(leagueId: number, _displayLimit?: number): Promise<Match[]> {
   const supabase = getSupabase();
-  return loadAllPages<Match>((from, to) => supabase.from("matches")
-    .select("id,date,team_a,team_b,score,result,processed,review_note")
-    .eq("league_id", leagueId).eq("processed", 1)
-    .order("date", { ascending: false }).order("id", { ascending: false }).range(from, to));
+  return loadCompletedMatches(supabase, leagueId);
 }
 
 export async function getDemoMmrHistory(leagueId: number): Promise<MmrHistory[]> {
@@ -180,12 +182,13 @@ export async function getDemoMmrHistory(leagueId: number): Promise<MmrHistory[]>
 
 export async function getDemoSummary() {
   const league = await getDemoLeague();
-  const [players, matches, mmrHistory] = await Promise.all([
-    getDemoPlayers(league.id),
+  const [modelPlayers, matches, mmrHistory] = await Promise.all([
+    getDemoPlayers(league.id, true),
     getDemoMatches(league.id, 80),
     getDemoMmrHistory(league.id)
   ]);
 
+  const players = modelPlayers.filter(p => p.is_active !== 0);
   const firstMatch = [...matches].sort((a, b) => String(a.date).localeCompare(String(b.date)))[0];
   const latestMatch = matches[0];
   const nameMap = makeNameMap(players);
@@ -193,6 +196,7 @@ export async function getDemoSummary() {
   return {
     league,
     players,
+    modelPlayers,
     matches,
     mmrHistory,
     nameMap,
@@ -202,6 +206,10 @@ export async function getDemoSummary() {
 }
 
 export function buildPlayerSummaries(players: Player[], matches: Match[]): PlayerSummary[] {
+  const ids = new Set(matches.map(m => m.id));
+  players = players.map(p => p.style_source ? attachStyleProfiles([p],
+    p.style_source.stats.filter(r => ids.has(r.match_id!)),
+    p.style_source.highlights.filter(r => ids.has(r.match_id!)))[0] : p);
   return players.map((player) => {
     const key = normalizeName(player.name);
     let goalsFor = 0;
@@ -232,6 +240,7 @@ export function buildPlayerSummaries(players: Player[], matches: Match[]): Playe
 
     return {
       ...player,
+      shieldWins: shieldWins(player, matches),
       matches_played: involved.length,
       wins,
       draws,

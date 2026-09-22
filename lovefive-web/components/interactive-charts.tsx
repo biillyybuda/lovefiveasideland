@@ -55,7 +55,7 @@ export function InteractiveCharts({
     () => mmrHistory.filter((row) => row.player_id === selectedPlayer?.id),
     [mmrHistory, selectedPlayer?.id]
   );
-  const chartTitle = view === "form" ? "Previous 5 Games" : "Rating Leaders";
+  const chartTitle = view === "form" ? "Previous 5 Games" : "League Rating Leaders";
   const progression = useMemo(() => {
     if (!selectedHistory.length) {
       return {
@@ -98,7 +98,7 @@ export function InteractiveCharts({
     <div className="interactive-stack">
       <section className="stats-snapshot-grid">
         <div className="snapshot-card primary">
-          <span>Rating leader</span>
+          <span>League rating leader</span>
           <strong>{topRating?.label || "-"}</strong>
           <small>{topRating ? `${Math.round(topRating.mmr || 0)} MMR` : "No players"}</small>
         </div>
@@ -117,14 +117,14 @@ export function InteractiveCharts({
           <small>{attendanceLeader ? `${attendancePct}% attendance` : "No games"}</small>
         </div>
         <div className="snapshot-card">
-          <span>Average MMR</span>
+          <span>Average league MMR</span>
           <strong>{Math.round(avgMmr)}</strong>
           <small>League average rating</small>
         </div>
       </section>
 
       <div className="segmented">
-        <button className={view === "ratings" ? "active" : ""} onClick={() => setView("ratings")}>Ratings</button>
+        <button className={view === "ratings" ? "active" : ""} onClick={() => setView("ratings")}>League ratings</button>
         {enablePreviousGames ? (
           <button className={view === "form" ? "active" : ""} onClick={() => setView("form")}>Previous 5 Games</button>
         ) : null}
@@ -175,7 +175,7 @@ export function InteractiveCharts({
         </div>
 
         <div className="panel">
-          <h2>MMR Progression</h2>
+          <h2>League MMR Progression</h2>
           <div className="control-bar">
             <label>
               <span>Player</span>
@@ -220,7 +220,7 @@ export function InteractiveCharts({
                 <tr>
                   <th>Rank</th>
                   <th>Player</th>
-                  <th>MMR</th>
+                  <th>League MMR</th>
                   <th>Matches</th>
                   <th>W-D-L</th>
                   <th>Goal Diff</th>

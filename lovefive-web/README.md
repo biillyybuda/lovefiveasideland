@@ -218,3 +218,29 @@ function, keeping league access, participant validation, version checks and
 retry handling. Older clients that omit these fields preserve saved readings;
 explicit null clears an individual field. Existing rows remain unchanged apart
 from the new null columns. No matchmaking or fitness-score rules are introduced.
+
+## MMR Immunity Shield
+
+Implemented locally on 22 September 2026; deployment and the database migration
+are still pending. Choose League or MMR Immunity Shield when recording a result.
+League alone changes public MMR and official season awards. Both competitions
+train team balancing. A Shield win awards one honour to each winning player;
+a draw stays a draw and awards nobody a Shield.
+
+The shared League / MMR Immunity Shield / All competitions filter scopes Home,
+Stats Centre and Season Review. Goals, assists, form, relationships and activity
+use the selected matches. Honours derive from results, so edits and deletions
+correct them automatically. Match reports, copied lineups and exported lineup
+images identify the fixture competition.
+
+Release this website together with
+`supabase/migrations/20260922074013_mmr_immunity_shield.sql`. It adds the competition
+field and `commit_competition_rating_run`, preserves existing games as League,
+and blocks outdated writers. New website saves require that function; there is
+no legacy write fallback. Reading a database without the new column remains
+supported for rollout. No public rating recalculation occurs on migration.
+
+Run `npm test` and `npm run build` before release. Competition tests include a
+local PostgreSQL integration test using PGlite; they never write to Supabase.
+See `../docs/mmr-immunity-shield-plan-2026-09-22.md` for verified rules and the
+coordinated release procedure.

@@ -4,13 +4,15 @@ import { useMemo } from "react";
 import { Shirt } from "lucide-react";
 import { buildPlayerSummaries, displayName, type Player } from "@/lib/demo-data";
 import { compareMatches, resolveLineup, type BalanceOption } from "@/lib/balance-model";
+import { competitionLabels, type Competition } from "@/lib/competition";
 import type { buildMatchdayBalance } from "@/lib/matchday-balance";
 import { LineupImageButton } from "@/components/lineup-image-button";
 
 const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
 const average = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1);
 
-export function BalanceMatchdayCard({ option, model, players, date, rank, onCopy, copyStatus, onEditLineup }: {
+export function BalanceMatchdayCard({ competition = "league", option, model, players, date, rank, onCopy, copyStatus, onEditLineup }: {
+  competition?: Competition;
   option: BalanceOption;
   model: ReturnType<typeof buildMatchdayBalance>;
   players: Player[];
@@ -52,17 +54,17 @@ export function BalanceMatchdayCard({ option, model, players, date, rank, onCopy
   const prediction = option.prediction;
   const gap = Math.abs(prediction.meanMargin);
   const favourite = prediction.win >= prediction.loss ? "Blue team" : "Red team";
-  const imageData = { date, blue: a.team.map(displayName), red: b.team.map(displayName), forecast: { win: prediction.win, draw: prediction.draw, loss: prediction.loss } };
+  const imageData = { competition, date, blue: a.team.map(displayName), red: b.team.map(displayName), forecast: { win: prediction.win, draw: prediction.draw, loss: prediction.loss } };
   const comparisons = [
     { label: "Team strength", a: a.strength, b: b.strength, left: Math.round(a.strength), right: Math.round(b.strength) },
     { label: "Avg uncertainty", a: a.uncertainty, b: b.uncertainty, left: `±${Math.round(a.uncertainty)}`, right: `±${Math.round(b.uncertainty)}` },
-    { label: "Recent form", a: a.form, b: b.form, left: `${a.form} pts`, right: `${b.form} pts` },
+    { label: "All-competition form", a: a.form, b: b.form, left: `${a.form} pts`, right: `${b.form} pts` },
     { label: "Games / player", a: a.appearances, b: b.appearances, left: a.appearances.toFixed(1), right: b.appearances.toFixed(1) }
   ];
 
   return <section className="panel matchday-card-panel balance-matchday-card" aria-label="Selected matchup forecast">
     <div className="panel-title-row">
-      <div><span className="stat-label">Selected matchup</span><h2>Matchday Card</h2></div>
+      <div><span className="stat-label">Selected matchup</span><h2>Matchday Card</h2><small>{competitionLabels[competition]}{competition === "immunity_shield" ? " - MMR protected" : ""}</small></div>
       <div className="balance-card-actions">
         <a className="ghost-button" href="#balance-recommendations">Change matchup</a>
         <button className="ghost-button" type="button" onClick={onCopy}>Copy teams</button>
@@ -73,7 +75,7 @@ export function BalanceMatchdayCard({ option, model, players, date, rank, onCopy
 
     <section className="matchday-broadcast" aria-label="Matchday lineup card">
       <header className="broadcast-heading">
-        <div><span className="broadcast-eyebrow">Love Five</span><h3>Matchday lineups</h3></div>
+        <div><span className="broadcast-eyebrow">Love Five</span><h3>{competitionLabels[competition]} lineups</h3></div>
         <time className="broadcast-date" dateTime={date}><span>{weekday}</span>{" "}<strong>{dateLabel}</strong></time>
       </header>
       <div className="broadcast-teams" role="group" aria-label="Matchday teams">

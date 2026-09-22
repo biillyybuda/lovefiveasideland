@@ -5,7 +5,7 @@ import { getDemoSummary } from "@/lib/demo-data";
 export const dynamic = "force-dynamic";
 
 export default async function DemoSeasonReviewPage() {
-  const { players, matches, mmrHistory } = await getDemoSummary();
+  const { players, modelPlayers, matches, mmrHistory } = await getDemoSummary();
 
   return (
     <AppShell active="season">
@@ -16,7 +16,7 @@ export default async function DemoSeasonReviewPage() {
         </div>
       </div>
 
-      <InteractiveSeason players={players} matches={matches} mmrHistory={mmrHistory} />
+      <InteractiveSeason players={players} historicalPlayers={modelPlayers} matches={matches} mmrHistory={mmrHistory} />
     </AppShell>
   );
 }

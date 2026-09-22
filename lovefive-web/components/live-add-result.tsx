@@ -8,6 +8,8 @@ import { makeNameMap, scoreParts, type Match, type Player } from "@/lib/demo-dat
 import { displayPlayerName } from "@/lib/live-data";
 import { normaliseScoreText, recalculateLeagueResults, resultLabelFromScore, saveLeagueChange, DRAFT_MATCH_ID, type LeagueChange } from "@/lib/result-rebuild";
 
+import { competitionLabels, matchCompetition, type Competition } from "@/lib/competition";
+
 export function LiveAddResult({
   leagueId,
   players,
@@ -22,6 +24,8 @@ export function LiveAddResult({
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [teamA, setTeamA] = useState<number[]>([]);
   const [teamB, setTeamB] = useState<number[]>([]);
+  const [competition, setCompetition] = useState<Competition>("league");
+  const [editCompetition, setEditCompetition] = useState<Competition>("league");
   const [score, setScore] = useState("");
   const [reviewNote, setReviewNote] = useState("");
   const [message, setMessage] = useState("");
@@ -76,6 +80,7 @@ export function LiveAddResult({
 
       const summary = await commit({ action: "add", match: {
           id: DRAFT_MATCH_ID,
+          competition,
           date,
           team_a: teamAString,
           team_b: teamBString,
@@ -90,7 +95,7 @@ export function LiveAddResult({
       setTeamB([]);
       setScore("");
       setReviewNote("");
-      setMessage(`Match saved. Recalculated ${summary.processedMatches} matches.`);
+      setMessage(`${competitionLabels[competition]} result saved. ${summary.ratedMatches} league matches rated; Shield MMR protected.`);
       await refresh();
     } catch (error) {
       const detail = error instanceof Error ? error.message : "Could not save match.";
@@ -102,6 +107,7 @@ export function LiveAddResult({
 
   function startEdit(match: Match) {
     setEditingMatch(match);
+    setEditCompetition(matchCompetition(match));
     setEditDate(String(match.date || "").slice(0, 10));
     setEditScore(normaliseScoreText(match.score) || String(match.score || ""));
     setEditReviewNote(match.review_note || "");
@@ -133,6 +139,7 @@ export function LiveAddResult({
     try {
       const summary = await commit({ action: "edit", original: editingMatch, match: {
           ...editingMatch,
+          competition: editCompetition,
           date: editDate,
           score: cleanScore,
           result: resultLabelFromScore(cleanScore),
@@ -188,6 +195,10 @@ export function LiveAddResult({
     <div className="interactive-stack">
       <form className="panel" onSubmit={saveMatch}>
         <h2>Add Result</h2>
+        <label><span>Competition</span><select value={competition} onChange={event => setCompetition(event.target.value as Competition)}>
+          <option value="league">League</option><option value="immunity_shield">MMR Immunity Shield</option>
+        </select></label>
+        <p className="competition-note">{competition === "immunity_shield" ? "MMR protected. Winners each earn a Shield; a draw awards nobody. This result helps balance future teams." : "League result: counts towards public MMR and league awards."}</p>
         <div className="control-bar match-management-controls">
           <label><span>Date</span><input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
           <label><span>Score</span><input value={score} onChange={(event) => setScore(event.target.value)} placeholder="10-8" /></label>
@@ -224,6 +235,9 @@ export function LiveAddResult({
         <form className="panel auth-form" onSubmit={saveEditedMatch}>
           <div className="admin-section-head">
             <h2>Edit Result</h2>
+            <label><span>Competition</span><select value={editCompetition} onChange={event => setEditCompetition(event.target.value as Competition)}>
+              <option value="league">League</option><option value="immunity_shield">MMR Immunity Shield</option>
+            </select></label>
             <button className="mini-link" disabled={busy} type="button" onClick={cancelEdit}><X />Cancel</button>
           </div>
           <div className="control-bar match-management-controls">
@@ -231,6 +245,7 @@ export function LiveAddResult({
             <label><span>Score</span><input value={editScore} onChange={(event) => setEditScore(event.target.value)} placeholder="10-8" /></label>
             <button className="button primary" disabled={busy} type="submit"><Save />Save correction</button>
           </div>
+          {editCompetition !== matchCompetition(editingMatch) && <p className="competition-note">Changing to {competitionLabels[editCompetition]} recalculates league ratings and Shield honours for this match.</p>}
           <label className="review-note-label"><span>Anything worth mentioning?</span><textarea maxLength={1500} value={editReviewNote} onChange={event => setEditReviewNote(event.target.value)}/><small>Optional · {editReviewNote.length}/1500</small></label>
         </form>
       ) : null}

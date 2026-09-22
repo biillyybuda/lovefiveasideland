@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { CompetitionLink as Link } from "@/components/competition-control";
 import { usePathname, useRouter } from "next/navigation";
 import { BrandMark } from "@/components/brand-mark";
 import { SetupChecklist } from "@/components/setup-checklist";

@@ -1,4 +1,5 @@
 import { buildPlayerSummaries, normalizeName, scoreParts, splitTeam, type Match, type MmrHistory, type Player, type PlayerSummary } from "./demo-data";
+import { isLeagueMatch } from "./competition";
 import { applyPeriodMmr } from "./mmr-engine";
 import { calculateAwardMmrUpdates, STARTING_MMR } from "./award-rating";
 
@@ -50,7 +51,7 @@ export function getPeriod(season: string, quarter: Quarter, matches: Match[]) {
 }
 
 export function latestMatchDateForSeason(matches: Match[], season: string) {
-  return matches
+  return matches.filter(isLeagueMatch)
     .map((match) => String(match.date || "").slice(0, 10))
     .filter((date) => date.startsWith(`${season}-`))
     .sort((a, b) => b.localeCompare(a))[0] || null;
@@ -105,6 +106,7 @@ export function playerSummariesForPeriod(
   end: string | null,
   mmrSeason: string
 ) {
+  periodMatches = periodMatches.filter(isLeagueMatch);
   const base = buildPlayerSummaries(players, periodMatches);
   const withSeasonMmr = applyPeriodMmr(base, mmrHistory, mmrSeason);
   return withSeasonMmr.map((player) => {
@@ -126,7 +128,18 @@ export function periodMmrChange(history: MmrHistory[], playerId: number, start: 
   };
 }
 
+function leagueAwardInputs(players: PlayerSummary[], matches: Match[]) {
+  if (matches.every(isLeagueMatch)) return { players, matches };
+  matches = matches.filter(isLeagueMatch);
+  const original = new Map(players.map(p => [p.id, p]));
+  players = buildPlayerSummaries(players, matches).map(p => ({ ...p,
+    periodMmrStart: original.get(p.id)!.periodMmrStart, periodMmrEnd: original.get(p.id)!.periodMmrEnd,
+    periodMmrChange: original.get(p.id)!.periodMmrChange }));
+  return { players, matches };
+}
+
 export function mvpRace(players: PlayerSummary[], matches: Match[]): MvpRow[] {
+  ({ players, matches } = leagueAwardInputs(players, matches));
   const matchCount = matches.length;
   const minimumMatches = minimumAwardMatches(matchCount);
   const eligible = players.filter((player) => Number(player.matches_played || 0) >= minimumMatches);
@@ -157,6 +170,8 @@ export function improvedRace(
   previousPeriod: { season: string; start: string | null; end: string | null; label: string } | null,
   quarter: Quarter
 ): { rows: ImprovedRow[]; title: string; subtitle: string } {
+  ({ players: currentPlayers, matches: currentMatches } = leagueAwardInputs(currentPlayers, currentMatches));
+  ({ players: previousPlayers, matches: previousMatches } = leagueAwardInputs(previousPlayers, previousMatches));
   const quarterMode = isNamedQuarter(quarter);
   const fallback = {
     rows: periodMmrImprovementRows(currentPlayers, currentMatches),
@@ -207,6 +222,7 @@ export function improvedRace(
 }
 
 export function periodMmrImprovementRows(players: PlayerSummary[], matches: Match[]): ImprovedRow[] {
+  ({ players, matches } = leagueAwardInputs(players, matches));
   return [...players]
     .filter((player) => player.periodMmrChange !== null && Number(player.matches_played || 0) >= minimumAwardMatches(matches.length))
     .sort((a, b) => Number(b.periodMmrChange || 0) - Number(a.periodMmrChange || 0))
@@ -234,6 +250,7 @@ export function awardScoreComponents(player: PlayerSummary, seasonRating: number
 }
 
 export function seasonOnlyRatings(players: PlayerSummary[], matches: Match[]) {
+  ({ players, matches } = leagueAwardInputs(players, matches));
   const seedRatings = seededSeasonStarts(players);
   const state = new Map<number, Player>(
     players.map((player) => [
@@ -418,6 +435,7 @@ export function signed(value: number) {
  * The caller supplies the established award roster separately from historical lineups.
  */
 export function seasonAwardSnapshot(players: Player[], matches: Match[], history: MmrHistory[], season: string) {
+  matches = matches.filter(isLeagueMatch);
   const ids = new Set(matches.map(match => match.id));
   const scopedHistory = history.filter(row => row.match_id !== null && ids.has(row.match_id));
   const period = getPeriod(season, "full", matches);

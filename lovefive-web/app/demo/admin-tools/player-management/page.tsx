@@ -1,3 +1,4 @@
+import { selectMatches } from "@/lib/competition";
 import { AppShell } from "@/components/app-shell";
 import { InteractivePlayers } from "@/components/interactive-players";
 import { buildPlayerSummaries, getDemoLeague, getDemoMatches, getDemoPlayers } from "@/lib/demo-data";
@@ -29,7 +30,7 @@ export default async function DemoPlayerManagementPage() {
         <p className="muted">The display-name field is included so the web flow keeps the fix from the Streamlit app.</p>
       </div>
 
-      <InteractivePlayers players={buildPlayerSummaries(players, matches)} showFitness />
+      <InteractivePlayers players={buildPlayerSummaries(players, selectMatches(matches))} showFitness />
     </AppShell>
   );
 }

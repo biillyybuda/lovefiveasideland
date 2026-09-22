@@ -6,7 +6,7 @@ import { LiveLeagueLoader } from "@/components/live-league-loader";
 export default function AppSeasonReviewPage() {
   return (
     <LiveLeagueLoader active="season">
-      {({ players, matches, mmrHistory }) => (
+      {({ players, modelPlayers, matches, mmrHistory }) => (
         <>
           <div className="page-head">
             <div>
@@ -14,7 +14,7 @@ export default function AppSeasonReviewPage() {
               <h1>Season Review</h1>
             </div>
           </div>
-          <InteractiveSeason players={players} matches={matches} mmrHistory={mmrHistory} />
+          <InteractiveSeason players={players} historicalPlayers={modelPlayers} matches={matches} mmrHistory={mmrHistory} />
         </>
       )}
     </LiveLeagueLoader>

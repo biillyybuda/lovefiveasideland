@@ -6,6 +6,7 @@ import { makeNameMap, normalizeName, resultFor, scoreParts, splitTeam, type Matc
 import { chemistryScoreFor, evidenceLabel, rivalryScoreFor } from "@/lib/relationship-scoring";
 import { PlayerHealthActivity } from "@/components/health-activity";
 import type { HealthContext } from "@/lib/health-stats";
+import type { CompetitionScope } from "@/lib/competition";
 
 type LinkRow = {
   key: string;
@@ -25,6 +26,7 @@ type LinkRow = {
 
 export function InteractiveInsights({
   initialPlayerId,
+  competition = "league",
   players,
   rawPlayers,
   matches,
@@ -35,6 +37,7 @@ export function InteractiveInsights({
   health
 }: {
   initialPlayerId?: string;
+  competition?: CompetitionScope;
   players: PlayerSummary[];
   rawPlayers: Player[];
   matches: Match[];
@@ -104,8 +107,11 @@ export function InteractiveInsights({
           {selected ? (
             <>
               <div className="profile-grid">
-                <div><span>MMR</span><strong>{Math.round(selected.mmr || 0)}</strong></div>
-                <div><span>MMR change</span><strong>{formatDelta(selected.periodMmrChange)}</strong></div>
+                {competition !== "immunity_shield" && <><div><span>League MMR</span><strong>{Math.round(selected.mmr || 0)}</strong></div>
+                <div><span>League MMR change</span><strong>{formatDelta(selected.periodMmrChange)}</strong></div></>}
+                {competition !== "league" && <div><span>Shields won</span><strong>{selected.shieldWins}</strong></div>}
+                <div><span>Recorded goals</span><strong>{selected.style_source?.stats.some(row => row.goals != null) ? selected.style_profile?.historicGoals : "—"}</strong></div>
+                <div><span>Recorded assists</span><strong>{selected.style_source?.stats.some(row => row.assists != null) ? selected.style_profile?.historicAssists : "—"}</strong></div>
                 <div><span>Record</span><strong>{selected.wins || 0}-{selected.draws || 0}-{selected.losses || 0}</strong></div>
                 <div><span>Form</span><strong>{selected.form.join(" ") || "-"}</strong></div>
                 <div><span>Goal diff</span><strong>{selected.goalDiff > 0 ? "+" : ""}{selected.goalDiff}</strong></div>

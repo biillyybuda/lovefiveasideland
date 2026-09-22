@@ -7,6 +7,7 @@ import { buildMatchdayBalance, matchdayOptions } from "@/lib/matchday-balance";
 import { predictBalance } from "@/lib/balance-model";
 import { FORMATIONS, LINK_COLOURS, PITCH, ROLE_NAMES, SIDES, buildLineupChemistry, initialLineup, isFormation, lineupLinks, lineupText, playerLink, savedRole, shieldName, suggestTeam, swapLineupColours, swapLineupPlayers, validateDraft, type Chemistry, type FormationId, type LineupDraft, type LineupSeed, type Role, type Side, type TeamLineup } from "@/lib/lineup-editor";
 import { SHIELD_PATH, SHIRT_PATH, TEAM_COLOURS, createFormationPoster } from "@/lib/lineup-poster";
+import { competitionLabels, matchCompetition, type Competition } from "@/lib/competition";
 import { LineupImageButton } from "@/components/lineup-image-button";
 
 type Target = { side: Side; index: number };
@@ -110,7 +111,7 @@ export function LineupEditor({ players, modelPlayers, matches, selected, seed, s
       const seedMatches = seed && rosterKey([...seed.blue, ...seed.red]) === selectedKey;
       if (seedMatches) {
         const chemistry = buildLineupChemistry(modelPlayers, matches, seed.date);
-        setDraft(initialLineup(seed.date, seed.blue, seed.red, players, chemistry)); setDate(seed.date);
+        setDraft(initialLineup(seed.date, seed.blue, seed.red, players, chemistry, seed.competition)); setDate(seed.date);
       } else {
         const raw = localStorage.getItem(storageKey);
         if (raw) {
@@ -219,6 +220,8 @@ export function LineupEditor({ players, modelPlayers, matches, selected, seed, s
       </div>
       <p className="muted">Drag a card onto another to swap, or tap one player then another. Tap a link for their shared record.</p>
       {usable && draft ? <>
+        <label><span>Fixture competition</span><select value={matchCompetition(draft)} onChange={event => act(() => commit({ ...draft, competition: event.target.value as Competition }, "Fixture competition updated."))}><option value="league">League</option><option value="immunity_shield">MMR Immunity Shield</option></select></label>
+        {draft.competition === "immunity_shield" && <p className="competition-note">MMR protected. A draw awards no Shield.</p>}
         <div className="lineup-actions">
           <button type="button" className="primary-button" onClick={suggest} disabled={!calculation.chemistry}><Sparkles size={16} />Suggest positions</button>
           <button type="button" className="ghost-button" onClick={() => act(() => commit(swapLineupColours(draft), "Team colours swapped. Forecast updated."))}><ArrowLeftRight size={16} />Swap team colours</button>
@@ -267,7 +270,7 @@ export function LineupEditor({ players, modelPlayers, matches, selected, seed, s
 
     {usable && draft && calculation.chemistry ? <>
       <section className="formation-board" aria-label="Editable matchday lineup">
-        <header className="formation-board-heading"><span>LOVE FIVE</span><h2>MATCHDAY LINEUPS</h2><time dateTime={date}>{new Date(`${date}T12:00:00Z`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}</time></header>
+        <header className="formation-board-heading"><span>LOVE FIVE</span><h2>{competitionLabels[matchCompetition(draft)]} Lineups</h2><time dateTime={date}>{new Date(`${date}T12:00:00Z`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}</time></header>
         <div className="formation-pitches">{SIDES.map(side => <Pitch key={side} side={side} team={draft[side]} chemistry={calculation.chemistry!} players={byId} locks={draft.locks} selected={chosen} dragging={!!drag} onChoose={choose} onPointer={handlePointer} onLink={(a, b) => { setPair([a, b]); setChosen(null); }} />)}</div>
         <footer className="formation-forecast"><h3>MATCH FORECAST</h3>{forecast ? <div><section className="blue"><span>BLUE WIN</span><strong>{pct(forecast.win)}</strong></section><section><span>DRAW</span><strong>{pct(forecast.draw)}</strong></section><section className="red"><span>RED WIN</span><strong>{pct(forecast.loss)}</strong></section></div> : <p>Forecast unavailable. Check the match date and records above.</p>}</footer>
       </section>

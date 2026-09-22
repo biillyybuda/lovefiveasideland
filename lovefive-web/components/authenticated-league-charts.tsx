@@ -103,6 +103,7 @@ export function AuthenticatedLeagueCharts() {
         </div>
       </div>
       <InteractiveStatsHub
+        initialCompetition={params.get("competition") || undefined}
         key={selectedLeague.id}
         initialPlayer={params.get("player") || undefined}
         initialPlayerSection={params.get("section") || undefined}

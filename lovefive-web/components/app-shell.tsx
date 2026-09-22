@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { CompetitionLink as Link } from "@/components/competition-control";
 import { BrandMark } from "@/components/brand-mark";
 
 const nav = [
