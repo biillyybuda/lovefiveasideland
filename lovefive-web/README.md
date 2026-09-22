@@ -221,8 +221,9 @@ from the new null columns. No matchmaking or fitness-score rules are introduced.
 
 ## MMR Immunity Shield
 
-Implemented locally on 22 September 2026; deployment and the database migration
-are still pending. Choose League or MMR Immunity Shield when recording a result.
+Released from `main` on 22 September 2026. The website is live on Render and the
+matching database migration is installed in the shared LoveFive project.
+Refresh existing admin pages before recording a result. Choose League or MMR Immunity Shield.
 League alone changes public MMR and official season awards. Both competitions
 train team balancing. A Shield win awards one honour to each winning player;
 a draw stays a draw and awards nobody a Shield.

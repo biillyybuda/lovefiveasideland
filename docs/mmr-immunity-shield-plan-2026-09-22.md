@@ -1,6 +1,6 @@
 # MMR Immunity Shield implementation
 
-Status (22 September 2026): implemented locally and covered by application and PostgreSQL integration tests. The production database migration and website deployment have not been performed.
+Status (22 September 2026): released from `main`. The production database migration is installed and the updated website is live on Render. All 97 tests and the production build passed before release.
 
 ## Agreed rules
 
@@ -42,7 +42,17 @@ Coverage includes winning/drawn Shield fixtures, add/edit/delete, backdating, fu
 
 Browser checks use fictional players and results: competition switching, player records, goals, winning and drawn reports, share output and mobile layout. No production result is created for testing. The temporary preview route is removed before delivery.
 
-## Release procedure (outstanding)
+## Production release verification
+
+- Published the application changes and the previously untracked migration history to `main` in commit `165775d`.
+- Saved a local application-data and function-definition backup before the database update.
+- Applied only `20260922074013_mmr_immunity_shield.sql`; the remote migration history is now up to date.
+- Compared all 17 application tables with the backup: existing data and access policies are unchanged. All 122 existing fixtures default to League, and all 1,220 rating-history entries are preserved.
+- Verified that the competition save function exists, permits authenticated callers and rejects anonymous callers. The security-advisor findings are unchanged from before the release.
+- Verified the live site's League default and switched to MMR Immunity Shield, which correctly shows no fixtures or honours yet.
+- Refresh existing admin pages before saving results so they load the new competition-aware writer.
+
+## Release procedure
 
 1. Prepare the tested website build and take the normal database backup. Confirm the current migration history still matches the checked foundation and notes functions.
 2. Apply only `20260922074013_mmr_immunity_shield.sql` through the normal migration workflow and deploy the matching website in the same release window. Result saving is unavailable between the two steps: the new website requires the new function, and the migration rejects old writers.
