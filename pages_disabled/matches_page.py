@@ -7,6 +7,7 @@ from utils.calc_utils import expected_score, process_unprocessed_matches, comput
 from utils.export_utils import df_to_png, fig_to_png_bytes
 from utils.ui_components import page_header
 from utils.names import display_name_map_from_players_df, player_display_name
+from utils.rating_model_version import uses_atomic_rating_writer
 
 def _parse_score_pair(score_text: str):
     parts = str(score_text or "").replace("-", " ").replace("–", " ").split()
@@ -29,6 +30,9 @@ def _result_from_score(score_text: str) -> str:
 
 def render_matches_page():
     page_header("Matches Management", "Add results and manage match history", center=True, divider=True)
+    if uses_atomic_rating_writer():
+        st.info("Result management for this league has moved to the updated website. Use its Add Result page to save or correct a match.")
+        return
     role = (st.session_state.get("league_role") or "").lower()
     if role not in ("admin", "owner"):
         st.warning("Only league admins can add, edit, delete, or process match results.")

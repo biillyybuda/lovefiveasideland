@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 from utils.db_utils import K_DEFAULT, DRAW_VALUE, STARTING_MMR, get_conn, get_current_league_id
 from psycopg2.extras import RealDictCursor
+from utils.rating_model_version import require_legacy_rating_writer
 
 def get_mmr(player_name: str, conn=None):
     """
@@ -114,6 +115,7 @@ def volatility_factor(player_mmr: float, league_mean: float) -> float:
 
 def process_unprocessed_matches(k_factor=K_DEFAULT, draw_value=DRAW_VALUE):
     """Process all unprocessed matches and update player MMRs using FairMMR v2."""
+    require_legacy_rating_writer()
 
     st.write("🔁 Processing all unprocessed matches from clean slate...")
 
@@ -375,6 +377,7 @@ def reset_and_reprocess_season():
       - Mark all matches unprocessed
       - Re-run processing from earliest date
     """
+    require_legacy_rating_writer()
     conn = get_conn()
     cur = conn.cursor()
     league_id = get_current_league_id()

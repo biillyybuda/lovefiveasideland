@@ -168,6 +168,7 @@ def _build_historic_style_state(match_stats: pd.DataFrame, highlights: pd.DataFr
     raw_weighted_goals: Dict[str, float] = defaultdict(float)
     raw_weighted_assists: Dict[str, float] = defaultdict(float)
     raw_save_impact: Dict[str, float] = defaultdict(float)
+    raw_save_moments: Dict[str, float] = defaultdict(float)
     raw_involvement: Dict[str, float] = defaultdict(float)
     raw_clutch: Dict[str, float] = defaultdict(float)
     stat_matches: Dict[str, set] = defaultdict(set)
@@ -242,6 +243,7 @@ def _build_historic_style_state(match_stats: pd.DataFrame, highlights: pd.DataFr
                 w = _tag_weight(r.get("save_tag", ""), default=1.0) + _special_bonus(special)
                 w += min(0.75, max(0.0, _safe_float(r.get("save_importance", 0.0)) * 0.15))
                 raw_save_impact[actor] += w
+                raw_save_moments[actor] += 1.0
 
     # Blend simple totals and tagged/weighted moments. Match_stats is a stable
     # baseline; highlights add importance and role nuance.
@@ -291,6 +293,7 @@ def _build_historic_style_state(match_stats: pd.DataFrame, highlights: pd.DataFr
             "historic_assists": float(raw_assists.get(p, 0.0)),
             "weighted_goals": float(raw_weighted_goals.get(p, 0.0)),
             "weighted_assists": float(raw_weighted_assists.get(p, 0.0)),
+            "save_moments": float(raw_save_moments.get(p, 0.0)),
             "historic_matches": float(len(stat_matches.get(p, set()))),
         }
 
@@ -848,7 +851,7 @@ def _historic_style_components(team_a: List[str], team_b: List[str], state: Dict
         (finishing_diff * 1.65)
         + (creation_diff * 1.65)
         + (impact_diff * 1.10)
-        + (save_diff * 0.65)
+        + (save_diff * 0.35)
         + (clutch_diff * 0.60)
         + creator_shortage
         + finisher_shortage
@@ -937,11 +940,12 @@ def _similarity_penalty(team_a: List[str], team_b: List[str], state: Dict[str, A
     if best_row is None:
         return 0.0, {"similarity": 0.0}
 
-    # Only kick in when VERY similar
-    if best_sim < 0.9:
+    # Start caring before an almost-exact repeat. A 4+4 overlap from a past
+    # heavy result should not be invisible just because it is not 9/10 players.
+    if best_sim < 0.75:
         return 0.0, {"similarity": float(best_sim)}
 
-    # Determine whether that match was one-sided
+    # Determine whether that match was one-sided enough to matter.
     res = str(best_row.get("result", "")).upper()
     gA, gB = _parse_score(best_row.get("score", ""))
 
@@ -951,30 +955,172 @@ def _similarity_penalty(team_a: List[str], team_b: List[str], state: Dict[str, A
 
     one_sided = False
     if goal_diff is not None:
-        one_sided = goal_diff >= 5
+        one_sided = goal_diff >= 3
     else:
-        # If we don't have scorelines, be conservative: only treat as one-sided if not a draw
-        one_sided = res in ("A", "B")
+        # If we don't have scorelines, be conservative: only treat as one-sided
+        # when the player overlap is extremely high and the result was decisive.
+        one_sided = best_sim >= 0.9 and res in ("A", "B")
 
     if not one_sided:
         return 0.0, {"similarity": float(best_sim), "one_sided": False}
 
-    # Penalty increases with similarity and goal diff (if available)
-    diff_factor = 1.0
-    if goal_diff is not None:
-        diff_factor = min(1.6, 1.0 + (goal_diff - 3) * 0.15)
+    sim_factor = ((best_sim - 0.75) / 0.25) ** 1.25
+    sim_factor = max(0.0, min(1.0, float(sim_factor)))
 
-    pen = 8.0 * best_sim * diff_factor
+    # Penalty increases with similarity, margin and recency.
+    margin_factor = 0.65
+    if goal_diff is not None:
+        margin_factor = max(0.35, min(1.6, (float(goal_diff) - 2.0) / 4.0))
+
+    recency_factor = 0.85
+    try:
+        if "date" in matches.columns:
+            latest_dt = pd.to_datetime(matches["date"], errors="coerce").max()
+            match_dt = pd.to_datetime(best_row.get("date", None), errors="coerce")
+            if pd.notna(latest_dt) and pd.notna(match_dt):
+                age_days = max(0.0, float((latest_dt - match_dt).days))
+                recency_factor = 0.65 + (0.35 * max(0.0, 1.0 - (age_days / 365.0)))
+    except Exception:
+        recency_factor = 0.85
+
+    pen = (2.0 + (12.0 * sim_factor * margin_factor)) * recency_factor
+    if best_sim >= 0.98 and (goal_diff or 0) >= 5:
+        pen += 4.0
 
     return float(pen), {
         "similarity": float(best_sim),
         "one_sided": True,
         "goal_diff": goal_diff,
+        "margin_factor": float(margin_factor),
+        "recency_factor": float(recency_factor),
         "swapped": bool(best_swapped),
         "match_id": best_row.get("id", None),
         "date": best_row.get("date", None),
         "score": best_row.get("score", None),
         "result": res,
+    }
+
+
+def _lower_average(values: List[float], count: int = 2, default: float | None = None) -> float:
+    clean = sorted(float(v) for v in values if isinstance(v, (int, float)) and math.isfinite(float(v)))
+    if not clean:
+        return float(STARTING_MMR if default is None else default)
+    return _avg(clean[:max(1, min(int(count), len(clean)))])
+
+
+def _lowest_value(values: List[float], default: float | None = None) -> float:
+    clean = sorted(float(v) for v in values if isinstance(v, (int, float)) and math.isfinite(float(v)))
+    if not clean:
+        return float(STARTING_MMR if default is None else default)
+    return float(clean[0])
+
+
+def _keeper_save_readiness(name: str, state: Dict[str, Any]) -> Optional[float]:
+    profiles = state.get("style_profiles", {}) or {}
+    prof = profiles.get(clean_name(name), {})
+    if not prof:
+        return None
+    raw_save = max(0.0, min(1.0, _safe_float(prof.get("save_impact", 0.0))))
+    save_moments = _safe_float(prof.get("save_moments", 0.0))
+    confidence = max(0.0, min(1.0, save_moments / 8.0))
+    neutral = 0.45
+    return float((neutral * (1.0 - confidence)) + (raw_save * confidence))
+
+
+def _team_keeper_save_profile(team: List[str], state: Dict[str, Any]) -> Dict[str, Any]:
+    values: List[float] = []
+    known = 0
+    for p in team:
+        readiness = _keeper_save_readiness(p, state)
+        if readiness is None:
+            values.append(0.45)
+        else:
+            known += 1
+            values.append(float(readiness))
+    credible = sum(1 for value in values if value >= 0.55)
+    return {
+        "known": int(known),
+        "average": _avg(values),
+        "floor": _lower_average(values, 2, default=0.45),
+        "weakest": _lowest_value(values, default=0.45),
+        "credible": int(credible),
+    }
+
+
+def _rotating_keeper_components(
+    team_a: List[str],
+    team_b: List[str],
+    eff_a: List[float],
+    eff_b: List[float],
+    state: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Estimate whether rotating keepers leaves one side more exposed."""
+    total_matches = state.get("total_matches", {}) or {}
+
+    floor_a = _lower_average(eff_a, 2)
+    floor_b = _lower_average(eff_b, 2)
+    weakest_a = _lowest_value(eff_a)
+    weakest_b = _lowest_value(eff_b)
+    exp_floor_a = _lower_average([_safe_float(total_matches.get(p, 0.0)) for p in team_a], 2, default=0.0)
+    exp_floor_b = _lower_average([_safe_float(total_matches.get(p, 0.0)) for p in team_b], 2, default=0.0)
+    save_a = _team_keeper_save_profile(team_a, state)
+    save_b = _team_keeper_save_profile(team_b, state)
+
+    floor_gap = abs(floor_a - floor_b)
+    weakest_gap = abs(weakest_a - weakest_b)
+    exp_floor_gap = abs(exp_floor_a - exp_floor_b)
+    save_avg_gap = abs(float(save_a["average"]) - float(save_b["average"]))
+    save_floor_gap = abs(float(save_a["floor"]) - float(save_b["floor"]))
+    save_weakest_gap = abs(float(save_a["weakest"]) - float(save_b["weakest"]))
+    save_coverage_gap = abs(float(save_a["credible"]) - float(save_b["credible"]))
+    save_profiles_enabled = int(save_a["known"]) + int(save_b["known"]) >= 2
+    save_penalty = 0.0
+    if save_profiles_enabled:
+        save_penalty = (
+            (save_floor_gap * 3.2)
+            + (save_avg_gap * 1.25)
+            + (save_weakest_gap * 1.1)
+            + (save_coverage_gap * 0.35)
+        )
+        save_penalty = max(0.0, min(4.0, float(save_penalty)))
+
+    base_penalty = (
+        (floor_gap * 0.18)
+        + (weakest_gap * 0.05)
+        + (max(0.0, exp_floor_gap - 2.0) * 0.18)
+    )
+    base_penalty = max(0.0, min(18.0, float(base_penalty)))
+    penalty = max(0.0, min(18.0, float(base_penalty + save_penalty)))
+
+    return {
+        "rotating_keeper_mode": True,
+        "rotation_floor_a": float(floor_a),
+        "rotation_floor_b": float(floor_b),
+        "rotation_floor_gap": float(floor_gap),
+        "rotation_weakest_a": float(weakest_a),
+        "rotation_weakest_b": float(weakest_b),
+        "rotation_weakest_gap": float(weakest_gap),
+        "rotation_experience_floor_a": float(exp_floor_a),
+        "rotation_experience_floor_b": float(exp_floor_b),
+        "rotation_experience_floor_gap": float(exp_floor_gap),
+        "rotation_base_penalty": float(base_penalty),
+        "rotation_save_enabled": bool(save_profiles_enabled),
+        "rotation_save_a": float(save_a["average"]),
+        "rotation_save_b": float(save_b["average"]),
+        "rotation_save_gap": float(save_avg_gap),
+        "rotation_save_floor_a": float(save_a["floor"]),
+        "rotation_save_floor_b": float(save_b["floor"]),
+        "rotation_save_floor_gap": float(save_floor_gap),
+        "rotation_save_weakest_a": float(save_a["weakest"]),
+        "rotation_save_weakest_b": float(save_b["weakest"]),
+        "rotation_save_weakest_gap": float(save_weakest_gap),
+        "rotation_save_coverage_a": float(save_a["credible"]),
+        "rotation_save_coverage_b": float(save_b["credible"]),
+        "rotation_save_coverage_gap": float(save_coverage_gap),
+        "rotation_save_known_a": float(save_a["known"]),
+        "rotation_save_known_b": float(save_b["known"]),
+        "rotation_save_penalty": float(save_penalty),
+        "rotating_keeper_penalty": float(penalty),
     }
 
 
@@ -1073,6 +1219,9 @@ def _evaluate_with_state(team_a: List[str], team_b: List[str], state: Dict[str, 
         sim_pen = float(state.get("similarity_penalty", 0.0) or 0.0)
         sim_debug = {}
 
+    rotation = _rotating_keeper_components(team_a, team_b, eff_a, eff_b, state)
+    rotation_penalty = float(rotation.get("rotating_keeper_penalty", 0.0) or 0.0)
+
     # Historic goals/assists/highlights layer. This is a fixed benchmark only:
     # it nudges team style balance and rewards proven creator -> scorer links.
     style = _historic_style_components(team_a, team_b, state)
@@ -1097,6 +1246,7 @@ def _evaluate_with_state(team_a: List[str], team_b: List[str], state: Dict[str, 
     W_BAD_DIFF = 0.05
 
     W_SIM = 1.0
+    W_KEEPER_ROTATION = 1.0
 
     # Final fairness score
     score = (
@@ -1113,6 +1263,7 @@ def _evaluate_with_state(team_a: List[str], team_b: List[str], state: Dict[str, 
         + (bad_total * W_BAD_TOTAL)
         + (bad_diff * W_BAD_DIFF)
         + (sim_pen * W_SIM)
+        + (rotation_penalty * W_KEEPER_ROTATION)
         + style_net
     )
 
@@ -1152,6 +1303,7 @@ def _evaluate_with_state(team_a: List[str], team_b: List[str], state: Dict[str, 
         "similarity_penalty": sim_pen,
         "similarity_debug": sim_debug,
     }
+    breakdown.update(rotation)
     breakdown.update(style)
     return float(score), breakdown
 
@@ -1297,6 +1449,7 @@ def evaluate_teams_v2(team_a: List[str], team_b: List[str]) -> Tuple[float, Dict
     chem_diff = float(breakdown.get("chem_diff", 0.0) or 0.0)
     bad_total = float(breakdown.get("badpair_total", 0.0) or 0.0)
     sim_pen = float(breakdown.get("similarity_penalty", 0.0) or 0.0)
+    rotation_penalty = float(breakdown.get("rotating_keeper_penalty", 0.0) or 0.0)
     style_net = float(breakdown.get("style_net", 0.0) or 0.0)
 
     hist = _historical_margin_model(team_a, team_b, state)
@@ -1306,7 +1459,7 @@ def evaluate_teams_v2(team_a: List[str], team_b: List[str]) -> Tuple[float, Dict
 
     # Fallback model when historical overlap is weak. This stays simple and
     # readable: MMR diff is primary, shape/chemistry are nudges.
-    fallback_margin = 1.15 + (mmr_diff / 18.0) + (spread_diff / 70.0) + (chem_diff / 45.0) + (bad_total / 18.0) + (sim_pen / 10.0) + (style_net / 5.0)
+    fallback_margin = 1.15 + (mmr_diff / 18.0) + (spread_diff / 70.0) + (chem_diff / 45.0) + (bad_total / 18.0) + (sim_pen / 10.0) + (rotation_penalty / 10.0) + (style_net / 5.0)
     fallback_margin = max(0.8, min(8.5, float(fallback_margin)))
     fallback_close = max(8.0, min(94.0, 94.0 - (fallback_margin * 11.0) - (mmr_diff * 0.20)))
 
@@ -1324,7 +1477,7 @@ def evaluate_teams_v2(team_a: List[str], team_b: List[str]) -> Tuple[float, Dict
     close_pct = max(5.0, min(95.0, float(close_pct)))
 
     # Quality is user-facing. It rewards close chance and punishes high margins.
-    quality = close_pct - max(0.0, predicted_margin - 2.0) * 7.5 - max(0.0, mmr_diff - 25.0) * 0.25 - max(0.0, style_net) * 1.2
+    quality = close_pct - max(0.0, predicted_margin - 2.0) * 7.5 - max(0.0, mmr_diff - 25.0) * 0.25 - max(0.0, rotation_penalty - 3.0) * 0.6 - max(0.0, style_net) * 1.2
     quality = max(0.0, min(100.0, float(quality)))
 
     # Ranking score: margin is king. MMR/spread/chemistry are tie-break nudges.
@@ -1335,6 +1488,7 @@ def evaluate_teams_v2(team_a: List[str], team_b: List[str]) -> Tuple[float, Dict
         + (chem_diff / 180.0)
         + (bad_total / 80.0)
         + (sim_pen / 40.0)
+        + (rotation_penalty / 40.0)
         + (style_net / 12.0)
     )
 
@@ -1397,6 +1551,7 @@ def matchup_recommendation_score(
     trio_diff = _clamp_float(breakdown.get("trio_diff", 0.0), 0.0, 500.0)
     bad_total = _clamp_float(breakdown.get("badpair_total", 0.0), 0.0, 100.0)
     sim_pen = _clamp_float(breakdown.get("similarity_penalty", 0.0), 0.0, 100.0)
+    rotation_penalty = _clamp_float(breakdown.get("rotating_keeper_penalty", 0.0), 0.0, 50.0)
     style_net = _clamp_float(breakdown.get("style_net", 0.0), -20.0, 20.0)
 
     margin = breakdown.get("v2_predicted_margin", interp.get("typical_margin", None))
@@ -1409,15 +1564,17 @@ def matchup_recommendation_score(
 
     mmr_component = max(0.0, 100.0 - (mmr_diff * 1.35))
     margin_component = max(0.0, 100.0 - max(0.0, margin - 1.4) * 20.0)
-    shape_component = max(0.0, 100.0 - (spread_diff * 0.45) - (chem_diff * 0.22) - (trio_diff * 0.08))
+    shape_component = max(0.0, 100.0 - (spread_diff * 0.45) - (chem_diff * 0.22) - (trio_diff * 0.08) - (rotation_penalty * 2.0))
     memory_component = max(0.0, 100.0 - (bad_total * 6.0) - (sim_pen * 7.0) - max(0.0, style_net) * 8.0)
+    rotation_component = max(0.0, 100.0 - (rotation_penalty * 7.0))
 
     recommendation = (
-        (mmr_component * 0.34)
-        + (margin_component * 0.24)
-        + (close * 0.18)
-        + (shape_component * 0.14)
-        + (memory_component * 0.06)
+        (mmr_component * 0.32)
+        + (margin_component * 0.23)
+        + (close * 0.17)
+        + (shape_component * 0.13)
+        + (rotation_component * 0.06)
+        + (memory_component * 0.05)
         + (quality * 0.04)
     )
     recommendation = _clamp_float(recommendation, 0.0, 100.0)
@@ -1427,6 +1584,7 @@ def matchup_recommendation_score(
         "mmr_component": float(mmr_component),
         "margin_component": float(margin_component),
         "shape_component": float(shape_component),
+        "rotation_component": float(rotation_component),
         "memory_component": float(memory_component),
         "close_component": float(close),
         "quality_component": float(quality),
@@ -1503,6 +1661,8 @@ def explain_matchup_plain_english(
     trio_diff = _clamp_float(breakdown.get("trio_diff", 0.0), 0.0, 500.0)
     bad_total = _clamp_float(breakdown.get("badpair_total", 0.0), 0.0, 100.0)
     sim_pen = _clamp_float(breakdown.get("similarity_penalty", 0.0), 0.0, 100.0)
+    rotation_penalty = _clamp_float(breakdown.get("rotating_keeper_penalty", 0.0), 0.0, 50.0)
+    save_rotation_penalty = _clamp_float(breakdown.get("rotation_save_penalty", 0.0), 0.0, 10.0)
     margin = ranking["predicted_margin"]
     close = ranking["close_pct"]
 
@@ -1525,6 +1685,13 @@ def explain_matchup_plain_english(
         positives.append("The team shapes look similar, without one side relying too much on a single carry.")
     elif spread_diff >= 16:
         cautions.append("The team shapes are uneven, so one side may feel more top-heavy.")
+
+    if rotation_penalty <= 3:
+        positives.append("Rotating keepers are balanced, so both teams carry a similar weakest-player floor.")
+    elif rotation_penalty >= 7:
+        cautions.append("One team has a weaker floor when everyone rotates through goal.")
+    if save_rotation_penalty >= 1.2:
+        cautions.append("Save-impact history gives one side a stronger rotating-keeper floor.")
 
     if chem_diff <= 5:
         positives.append("Chemistry is balanced enough that both teams should have passing options.")

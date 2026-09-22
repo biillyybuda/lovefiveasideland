@@ -1650,6 +1650,26 @@ def _style_val(bd, key, default=0.0):
         return float(default)
 
 
+def _matchup_risk_metrics(bd: dict) -> dict:
+    sim_debug = bd.get("similarity_debug", {}) or {}
+    sim_pen = _style_val(bd, "similarity_penalty")
+    sim = _style_val(sim_debug, "similarity")
+    bad_raw = max(_style_val(bd, "badpair_total_raw"), _style_val(bd, "badpair_total"))
+    rotation = _style_val(bd, "rotating_keeper_penalty")
+    margin = _style_val(bd, "v2_predicted_margin", 99.0)
+    mmr = _style_val(bd, "mmr_diff")
+    return {
+        "similarity_penalty": sim_pen,
+        "similarity": sim,
+        "badpair_total_raw": bad_raw,
+        "rotating_keeper_penalty": rotation,
+        "margin": margin,
+        "mmr": mmr,
+        "is_repeat_risk": sim_pen > 0.25,
+        "is_high_risk": sim_pen >= 7.0 or bad_raw >= 9.0 or rotation >= 9.0 or margin >= 6.5 or mmr >= 45.0,
+    }
+
+
 def _matchup_archetype(breakdown: dict) -> str:
     """Classify the option into a useful football-style matchup label."""
     fa = _style_val(breakdown, "style_finishing_a")
@@ -1716,10 +1736,18 @@ def _option_explanation(breakdown: dict, close_pct: float):
 
     if _style_val(breakdown, "spread_diff") > 12:
         risks.append("Uneven team shape")
+    if _style_val(breakdown, "rotating_keeper_penalty") <= 3:
+        positives.append("Balanced rotating-keeper load")
+    elif _style_val(breakdown, "rotating_keeper_penalty") >= 7:
+        risks.append("Uneven rotating-keeper floor")
+    if _style_val(breakdown, "rotation_save_penalty") >= 1.2:
+        risks.append("Save profiles favour one rotating-keeper floor")
     if _style_val(breakdown, "chem_diff") > 7:
         risks.append("Chemistry imbalance")
     if _style_val(breakdown, "badpair_total") > 2:
         risks.append("Known weak pairings involved")
+    if _style_val(breakdown, "similarity_penalty") > 0:
+        risks.append("Similar past matchup was one-sided")
 
     fin_gap = _style_val(breakdown, "style_finishing_a") - _style_val(breakdown, "style_finishing_b")
     cre_gap = _style_val(breakdown, "style_creation_a") - _style_val(breakdown, "style_creation_b")
@@ -1789,20 +1817,27 @@ def _score_candidate_for_philosophy(row, philosophy: str) -> float:
     creation_avg = (_style_val(bd, "style_creation_a") + _style_val(bd, "style_creation_b")) / 2.0
     finishing_gap = abs(_style_val(bd, "style_finishing_a") - _style_val(bd, "style_finishing_b"))
     creation_gap = abs(_style_val(bd, "style_creation_a") - _style_val(bd, "style_creation_b"))
+    risk = _matchup_risk_metrics(bd)
+    sim_pen = float(risk["similarity_penalty"])
+    bad_raw = float(risk["badpair_total_raw"])
+    rotation = float(risk["rotating_keeper_penalty"])
+    risk_penalty = (sim_pen * 4.5) + (max(0.0, bad_raw - 4.0) * 3.0) + (max(0.0, rotation - 3.0) * 2.2)
 
     if philosophy == "best_overall":
-        return rec
+        return rec - risk_penalty
     if philosophy == "closest_game":
-        return (close * 1.1) + max(0, 100 - margin * 18) - (mmr * 0.35)
+        return (close * 1.1) + max(0, 100 - margin * 18) - (mmr * 0.35) - risk_penalty
     if philosophy == "pure_mmr":
-        return 100 - (mmr * 3.0) - (spread * 0.35)
+        return 100 - (mmr * 3.0) - (spread * 0.35) - risk_penalty
     if philosophy == "highest_chemistry":
-        return 70 + (chem_density * 12) + (style_bonus * 10) - (chem * 2.0) - (margin * 3)
+        return 70 + (chem_density * 12) + (style_bonus * 10) - (chem * 2.0) - (margin * 3) - risk_penalty
     if philosophy == "tactical_contrast":
         contrast = finishing_gap + creation_gap
-        return (contrast * 80) + close - (margin * 7) - (mmr * 0.6)
+        return (contrast * 80) + close - (margin * 7) - (mmr * 0.6) - risk_penalty
     if philosophy == "chaos_match":
-        return (finishing_avg * 35) + (creation_avg * 25) + (style_bonus * 8) + close - (margin * 5) - max(0, mmr - 25)
+        return (finishing_avg * 35) + (creation_avg * 25) + (style_bonus * 8) + close - (margin * 5) - max(0, mmr - 25) - risk_penalty
+    if philosophy == "risky_alternative":
+        return rec + (sim_pen * 2.0) + max(0.0, bad_raw - 4.0) - (margin * 5.0) - (mmr * 0.35)
     return rec
 
 
@@ -1813,6 +1848,10 @@ def _build_diverse_smart_options(all_ranked):
 
     selected = []
     selected_keys = set()
+    global_rank_by_key = {
+        _team_split_key(row[2], row[3]): idx
+        for idx, row in enumerate(all_ranked, 1)
+    }
 
     philosophies = [
         ("Best overall", "best_overall"),
@@ -1821,13 +1860,55 @@ def _build_diverse_smart_options(all_ranked):
         ("Highest chemistry", "highest_chemistry"),
         ("Tactical contrast", "tactical_contrast"),
         ("Chaos matchup", "chaos_match"),
+        ("Risky alternative", "risky_alternative"),
     ]
+
+    def global_rank(row):
+        _rk, _score, A, B, _bd, _interp = row
+        return int(global_rank_by_key.get(_team_split_key(A, B), 9999))
 
     def viable(row):
         _rk, _score, _A, _B, bd, interp = row
         margin = float(bd.get("v2_predicted_margin", interp.get("typical_margin", 99)) or 99)
         mmr = float(bd.get("mmr_diff", 0) or 0)
-        return margin <= 6.5 and mmr <= 45
+        rec = float(interp.get("recommendation_score", 0) or 0)
+        risk = _matchup_risk_metrics(bd)
+        return margin <= 6.5 and mmr <= 45 and rec >= 50 and not bool(risk["is_high_risk"])
+
+    def allowed_for_philosophy(row, philosophy):
+        _rk, _score, _A, _B, bd, _interp = row
+        risk = _matchup_risk_metrics(bd)
+        rank = global_rank(row)
+
+        if philosophy == "risky_alternative":
+            return (
+                bool(risk["is_repeat_risk"])
+                and rank <= 60
+                and risk["margin"] <= 6.5
+                and risk["mmr"] <= 45
+                and risk["rotating_keeper_penalty"] < 9.0
+            )
+
+        if bool(risk["is_high_risk"]):
+            return False
+
+        # The headline options should never be a near-repeat of a one-sided game.
+        if philosophy in ("best_overall", "closest_game", "pure_mmr"):
+            return (
+                (not bool(risk["is_repeat_risk"]))
+                and risk["badpair_total_raw"] < 8.0
+                and risk["rotating_keeper_penalty"] < 7.0
+                and rank <= 35
+            )
+
+        # Flavour options can be a little looser, but still should not smuggle
+        # repeat-risk games into the main shortlist.
+        return (
+            risk["similarity_penalty"] < 2.0
+            and risk["badpair_total_raw"] < 9.0
+            and risk["rotating_keeper_penalty"] < 8.0
+            and rank <= 50
+        )
 
     viable_rows = [r for r in all_ranked if viable(r)] or all_ranked[:]
 
@@ -1835,7 +1916,8 @@ def _build_diverse_smart_options(all_ranked):
         def adjusted(r):
             return _score_candidate_for_philosophy(r, philosophy) - (_core_reuse_score(r, selected) * 28.0)
 
-        candidates = sorted(viable_rows, key=adjusted, reverse=True)
+        pool = all_ranked if philosophy == "risky_alternative" else viable_rows
+        candidates = sorted([r for r in pool if allowed_for_philosophy(r, philosophy)], key=adjusted, reverse=True)
         chosen = None
 
         for max_overlap, max_core in ((6, 0.55), (7, 0.68), (8, 0.85), (10, 99.0)):
@@ -1863,9 +1945,20 @@ def _build_diverse_smart_options(all_ranked):
             break
         _rk, _score, A, B, _bd, _interp = r
         k = _team_split_key(A, B)
-        if k not in selected_keys:
+        if k not in selected_keys and allowed_for_philosophy(r, "chaos_match"):
             selected.append((r, "Strong alternative"))
             selected_keys.add(k)
+
+    for r in all_ranked:
+        if len(selected) >= 5:
+            break
+        _rk, _score, A, B, bd, _interp = r
+        k = _team_split_key(A, B)
+        if k in selected_keys:
+            continue
+        label = "Risky alternative" if bool(_matchup_risk_metrics(bd)["is_high_risk"]) else "Strong alternative"
+        selected.append((r, label))
+        selected_keys.add(k)
 
     return selected[:5]
 
@@ -2004,6 +2097,7 @@ def render_team_generator_page(show_header: bool = True):
     # ----- Generate & persist results so clicking "Use this matchup" doesn't wipe them -----
     if st.button("Generate Balanced Teams"):
         st.session_state.tg_has_generated = True
+        get_engine_state(force_reload=True)
         team_size = 4 if captain_mode else 5
         remain = [p for p in sel if p not in locks_A + locks_B]
 
@@ -2016,9 +2110,9 @@ def render_team_generator_page(show_header: bool = True):
                 eval_A = [captainA] + A if (captain_mode and captainA) else A[:]
                 eval_B = [captainB] + B if (captain_mode and captainB) else B[:]
 
-                # engine keys are lowercase
-                eval_A_norm = [p.lower() for p in eval_A]
-                eval_B_norm = [p.lower() for p in eval_B]
+                # engine keys use the same normalizer as historical matchup lookups
+                eval_A_norm = [clean_name(p) for p in eval_A]
+                eval_B_norm = [clean_name(p) for p in eval_B]
 
                 if evaluate_teams_v2 is not None:
                     fairness_score, breakdown = evaluate_teams_v2(eval_A_norm, eval_B_norm)
@@ -2075,7 +2169,10 @@ def render_team_generator_page(show_header: bool = True):
         # same safe chemistry split. Core-reuse penalties are only used for this
         # shortlist, not for the actual fairness model.
         top = _build_diverse_smart_options(all_ranked)
-        top = sorted(top, key=lambda pair: pair[0][0])
+        overall_rank_by_key = {
+            _team_split_key(A, B): rank_i
+            for rank_i, (_rank_key, _score, A, B, _breakdown, _interp) in enumerate(all_ranked, 1)
+        }
 
         st.session_state.tg_all_matchups = {
             "captain_mode": bool(captain_mode),
@@ -2088,15 +2185,18 @@ def render_team_generator_page(show_header: bool = True):
         }
 
         top_items = []
-        for rank_i, ((_rank_key, score, A, B, breakdown, interp), label) in enumerate(top, 1):
+        for option_i, ((_rank_key, score, A, B, breakdown, interp), label) in enumerate(top, 1):
             disp_A_for_tweaks = ([captainA] + A) if (captain_mode and captainA) else A[:]
             disp_B_for_tweaks = ([captainB] + B) if (captain_mode and captainB) else B[:]
+            overall_rank = int(overall_rank_by_key.get(_team_split_key(A, B), option_i))
             try:
                 tweaks = find_best_tweaks(disp_A_for_tweaks, disp_B_for_tweaks, max_suggestions=2)
             except Exception:
                 tweaks = {"suggestions": [], "message": "No obvious improvement found."}
             top_items.append({
-                "rank": rank_i,
+                "option_number": option_i,
+                "rank": overall_rank,
+                "overall_rank": overall_rank,
                 "smart_label": label,
                 "score": score,
                 "A": A,
@@ -2161,6 +2261,8 @@ def render_team_generator_page(show_header: bool = True):
                     "Spread diff": round(float(bd.get("spread_diff", 0) or 0), 1),
                     "Chem diff": round(float(bd.get("chem_diff", 0) or 0), 1),
                     "Bad pairs": round(float(bd.get("badpair_total", 0) or 0), 1),
+                    "Repeat risk": round(float(bd.get("similarity_penalty", 0) or 0), 1),
+                    "Keeper rotation": round(float(bd.get("rotating_keeper_penalty", 0) or 0), 1),
                     "Archetype": _matchup_archetype(bd),
                     "Style adj": round(float(bd.get("style_net", 0) or 0), 2),
                     "Role penalty": round(float(bd.get("style_penalty", 0) or 0), 2),
@@ -2177,10 +2279,10 @@ def render_team_generator_page(show_header: bool = True):
 
                 sort_by = st.selectbox(
                     "Sort table by",
-                    ["Recommendation", "Potential", "Close %", "Margin", "MMR diff", "Spread diff", "Chem diff", "Style adj", "Role penalty"],
+                    ["Recommendation", "Potential", "Close %", "Margin", "MMR diff", "Spread diff", "Chem diff", "Bad pairs", "Repeat risk", "Keeper rotation", "Style adj", "Role penalty"],
                     index=0,
                 )
-                ascending = sort_by in ["Margin", "MMR diff", "Spread diff", "Chem diff", "Style adj", "Role penalty"]
+                ascending = sort_by in ["Margin", "MMR diff", "Spread diff", "Chem diff", "Bad pairs", "Repeat risk", "Keeper rotation", "Style adj", "Role penalty"]
 
                 view = all_df[
                     (all_df["Margin"] <= float(max_margin))
@@ -2256,7 +2358,12 @@ def render_team_generator_page(show_header: bool = True):
 
         interp_saved = dict(item.get("quality_interp") or {})
         smart_label = str(item.get("smart_label") or "Option")
-        st.markdown(f"**Rank #{int(item.get('rank', i) or i)} - {smart_label}**")
+        option_number = int(item.get("option_number", i) or i)
+        overall_rank = int(item.get("overall_rank", item.get("rank", option_number)) or option_number)
+        st.markdown(f"**Option {option_number} - {smart_label}**")
+        st.caption(f"Overall generator rank #{overall_rank}")
+        if smart_label == "Risky alternative":
+            st.warning("This split has a repeat-risk or bad-pair warning. Use it only if the safer options do not fit the group.")
 
         # Clean matchup card (no repeated sub-headers)
         boxA = f"""
@@ -2298,10 +2405,12 @@ def render_team_generator_page(show_header: bool = True):
             q = float(q or 0.0)
             close_pct = float(close_pct or 0.0)
             typical = float(typical or 0.0)
+            keeper_rotation = float(breakdown.get("rotating_keeper_penalty", 0) or 0)
 
-            c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns(3)
             c1.metric("⚽ Match Potential", f"{q:.0f}/100", help="A display-friendly read on how promising this matchup looks. It blends balance, predicted margin, close-game chance and historic style, but it is not a guarantee.")
             c2.metric("Tight-game chance", f"{close_pct:.0f}%", help="Estimated chance this game finishes within 2 goals, based on similar previous games and the V2 fallback model.")
+            c3.metric("Keeper rotation", f"{keeper_rotation:.1f}", help="Lower is better. This checks whether both teams have a similar weakest-player floor and save-impact profile when everyone rotates through goal.")
 
             # --- Human-readable AI explanation layer ---
             ai_explainer = explain_matchup_plain_english(disp_A, disp_B, breakdown, interp)
@@ -2387,6 +2496,15 @@ def render_team_generator_page(show_header: bool = True):
             st.markdown(
                 f"- Spread A / B: `{float(breakdown.get('spread_a', 0)):.2f}` vs `{float(breakdown.get('spread_b', 0)):.2f}`  \n"
                 f"- Difference: `{float(breakdown.get('spread_diff', 0)):.2f}`"
+            )
+
+            st.write("**Rotating keepers**")
+            st.markdown(
+                f"- Weakest-two floor A / B: `{float(breakdown.get('rotation_floor_a', 0)):.1f}` vs `{float(breakdown.get('rotation_floor_b', 0)):.1f}`  \n"
+                f"- Floor gap: `{float(breakdown.get('rotation_floor_gap', 0)):.1f}`  \n"
+                f"- Save-profile floor A / B: `{float(breakdown.get('rotation_save_floor_a', 0)):.2f}` vs `{float(breakdown.get('rotation_save_floor_b', 0)):.2f}`  \n"
+                f"- Save-profile penalty: `{float(breakdown.get('rotation_save_penalty', 0)):.2f}`  \n"
+                f"- Rotation penalty: `{float(breakdown.get('rotating_keeper_penalty', 0)):.2f}`"
             )
 
             st.write("**Chemistry**")
