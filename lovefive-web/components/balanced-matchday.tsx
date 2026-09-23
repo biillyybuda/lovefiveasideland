@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { displayName, formatTeam, formatUkDate, makeNameMap, normalizeName, splitTeam, type Match, type Player } from "@/lib/demo-data";
 import { buildMatchdayBalance, matchdayOptions } from "@/lib/matchday-balance";
 import { BalanceMatchdayCard } from "@/components/balance-matchday-card";
+import { MatchDatePicker } from "@/components/match-date-picker";
 import { matchdayOutlook } from "@/lib/matchday-outlook";
 import { competitionLabels, type Competition } from "@/lib/competition";
 import type { LineupSeed } from "@/lib/lineup-editor";
@@ -41,6 +42,13 @@ export function BalancedMatchday({ players, selected, matches, locksA, locksB, o
   })).filter(row => row.overlap >= 4).sort((a, b) => b.overlap - a.overlap || String(b.match.date).localeCompare(String(a.match.date)) || b.match.id - a.match.id).slice(0, 6);
   const selectionKey = `${date}:${chosen?.teamA.map(player => player.id).join(",") || ""}:${chosen?.teamB.map(player => player.id).join(",") || ""}`;
 
+  function changeDate(nextDate: string) {
+    // Keep the displayed lineup when a different date changes recommendation order.
+    setChosenKey(chosen?.key || "");
+    setDate(nextDate);
+    setCopyMessage("");
+  }
+
   async function copyTeams() {
     if (!chosen) return;
     try {
@@ -53,7 +61,7 @@ export function BalancedMatchday({ players, selected, matches, locksA, locksB, o
     <section className="panel">
       <div className="panel-title-row"><div><span className="stat-label">Team balancing</span><h2>Strength + uncertainty</h2></div>
         <label><span>Fixture competition</span><select value={competition} onChange={event => setCompetition(event.target.value as Competition)}><option value="league">League</option><option value="immunity_shield">MMR Immunity Shield</option></select></label>
-        <label><span>Match date</span><input type="date" value={date} onChange={event => { setDate(event.target.value); setChosenKey(""); }} /></label>
+        <MatchDatePicker date={date} onChange={changeDate} />
       </div>
       <p className="muted">League and Shield results both help balance teams. Public MMR and season awards use league results only. {competition === "immunity_shield" ? "This fixture has MMR immunity; a draw awards no Shield." : "This is a rated league fixture."}</p>
       {model ? <small className="muted">Based on {model.history.length} completed games on or before {formatUkDate(date)}. A close game means a draw or a win by one or two goals.</small> : null}
@@ -89,7 +97,7 @@ export function BalancedMatchday({ players, selected, matches, locksA, locksB, o
       </section>
 
       {chosen ? <BalanceMatchdayCard competition={competition} option={chosen} model={model} players={players} date={date}
-        rank={options.indexOf(chosen) + 1} onCopy={copyTeams}
+        rank={options.indexOf(chosen) + 1} onCopy={copyTeams} onDateChange={changeDate}
         onEditLineup={() => onEditLineup?.({ competition, date, blue: chosen.teamA.map(p => p.id), red: chosen.teamB.map(p => p.id), revision: Date.now() })}
         copyStatus={copyMessage === selectionKey ? "Teams copied." : copyMessage.startsWith("Copy unavailable") ? copyMessage : ""} /> : null}
 

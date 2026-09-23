@@ -4,7 +4,13 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Download, X } from "lucide-react";
 import { createLineupImage, type LineupImageData } from "@/lib/lineup-image";
 
-export function LineupImageButton({ data, renderImage }: { data: LineupImageData; renderImage?: () => Promise<{ blob: Blob; filename: string; width: number; height: number }> }) {
+type ImageRenderer = () => Promise<{ blob: Blob; filename: string; width: number; height: number }>;
+type ImageButtonProps = { buttonLabel?: string } & (
+  { data: LineupImageData; renderImage?: ImageRenderer; previewAlt?: string } |
+  { data?: never; renderImage: ImageRenderer; previewAlt: string }
+);
+
+export function LineupImageButton({ data, renderImage, buttonLabel = "Save lineup image", previewAlt }: ImageButtonProps) {
   const titleId = useId();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -30,11 +36,11 @@ export function LineupImageButton({ data, renderImage }: { data: LineupImageData
     setBusy(true);
     setError("");
     try {
-      const result = await (renderImage ? renderImage() : createLineupImage(data));
+      const result = await (renderImage ? renderImage() : data ? createLineupImage(data) : Promise.reject(new Error("Image data is unavailable.")));
       if (!disposed.current) setPreview({ url: URL.createObjectURL(result.blob), filename: result.filename, width: result.width, height: result.height });
     } catch (cause) {
       console.error("Lineup image export failed", cause);
-      if (!disposed.current) setError("Could not create the lineup image. Refresh the page and try again.");
+      if (!disposed.current) setError("Could not create the image. Refresh the page and try again.");
     } finally {
       inProgress.current = false;
       if (!disposed.current) setBusy(false);
@@ -43,7 +49,7 @@ export function LineupImageButton({ data, renderImage }: { data: LineupImageData
 
   return <>
     <button className="ghost-button lineup-image-button" type="button" onClick={prepareImage} disabled={busy}>
-      <Download size={16} aria-hidden="true" />{busy ? "Creating image…" : "Save lineup image"}
+      <Download size={16} aria-hidden="true" />{busy ? "Creating image…" : buttonLabel}
     </button>
     {error ? <span className="lineup-image-error" role="alert">{error}</span> : null}
     {preview ? <dialog ref={dialog} className="lineup-image-dialog" aria-labelledby={titleId} onCancel={event => { event.preventDefault(); closePreview(); }}>
@@ -55,7 +61,7 @@ export function LineupImageButton({ data, renderImage }: { data: LineupImageData
       {/* The generated local PNG is also the exact file offered for download. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img className="lineup-image-preview" src={preview.url} width={preview.width} height={preview.height}
-        alt={`Lineups for ${data.date}. Blue: ${data.blue.join(", ")}. Red: ${data.red.join(", ")}. Blue win ${(data.forecast.win * 100).toFixed(1)}%, draw ${(data.forecast.draw * 100).toFixed(1)}%, red win ${(data.forecast.loss * 100).toFixed(1)}%.`} />
+        alt={previewAlt || (data ? `Lineups for ${data.date}. Blue: ${data.blue.join(", ")}. Red: ${data.red.join(", ")}. Blue win ${(data.forecast.win * 100).toFixed(1)}%, draw ${(data.forecast.draw * 100).toFixed(1)}%, red win ${(data.forecast.loss * 100).toFixed(1)}%.` : "Matchday image")} />
       <a className="primary-button lineup-image-download" href={preview.url} download={preview.filename}><Download size={18} aria-hidden="true" />Download image</a>
     </dialog> : null}
   </>;

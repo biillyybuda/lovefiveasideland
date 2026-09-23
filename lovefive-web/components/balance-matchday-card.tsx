@@ -4,14 +4,17 @@ import { useMemo } from "react";
 import { Shirt } from "lucide-react";
 import { buildPlayerSummaries, displayName, type Player } from "@/lib/demo-data";
 import { compareMatches, resolveLineup, type BalanceOption } from "@/lib/balance-model";
-import { competitionLabels, type Competition } from "@/lib/competition";
+import { competitionLabels, matchCompetition, type Competition } from "@/lib/competition";
 import type { buildMatchdayBalance } from "@/lib/matchday-balance";
 import { LineupImageButton } from "@/components/lineup-image-button";
+import { MatchDatePicker } from "@/components/match-date-picker";
+import { MatchdayPlayerCards } from "@/components/matchday-player-cards";
+import type { PlayerCardData } from "@/lib/player-cards-image";
 
 const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
 const average = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1);
 
-export function BalanceMatchdayCard({ competition = "league", option, model, players, date, rank, onCopy, copyStatus, onEditLineup }: {
+export function BalanceMatchdayCard({ competition = "league", option, model, players, date, rank, onCopy, copyStatus, onEditLineup, onDateChange }: {
   competition?: Competition;
   option: BalanceOption;
   model: ReturnType<typeof buildMatchdayBalance>;
@@ -21,6 +24,7 @@ export function BalanceMatchdayCard({ competition = "league", option, model, pla
   onCopy: () => void;
   copyStatus: string;
   onEditLineup?: () => void;
+  onDateChange: (date: string) => void;
 }) {
   const context = useMemo(() => {
     const byId = new Map(players.map(player => [player.id, player]));
@@ -48,6 +52,14 @@ export function BalanceMatchdayCard({ competition = "league", option, model, pla
     };
   });
   const [a, b] = sides;
+  function playerCard({ player, rating, record }: typeof a.roster[number]): PlayerCardData {
+    return { name: displayName(player), mmr: player.mmr ?? 1000,
+      games: rating.appearances, wins: record.wins ?? 0, draws: record.draws ?? 0, losses: record.losses ?? 0,
+      form: record.recentMatches.slice(0, 5).map((match, i) => ({
+        result: record.form[i] === "W" ? "W" : record.form[i] === "L" ? "L" : "D",
+        shield: matchCompetition(match) === "immunity_shield", date: match.date
+      })) };
+  }
   const matchDate = new Date(`${date}T12:00:00Z`);
   const weekday = matchDate.toLocaleDateString("en-GB", { weekday: "long", timeZone: "UTC" });
   const dateLabel = matchDate.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
@@ -71,6 +83,11 @@ export function BalanceMatchdayCard({ competition = "league", option, model, pla
         {onEditLineup ? <button className="ghost-button" type="button" onClick={onEditLineup}>Edit lineup</button> : null}
         <LineupImageButton key={JSON.stringify(imageData)} data={imageData} />
       </div>
+    </div>
+
+    <div className="matchday-date-controls">
+      <MatchDatePicker date={date} onChange={onDateChange} />
+      <p className="muted">Choose when you&apos;re playing. This date appears on the lineup, copied teams and saved image.</p>
     </div>
 
     <section className="matchday-broadcast" aria-label="Matchday lineup card">
@@ -174,21 +191,7 @@ export function BalanceMatchdayCard({ competition = "league", option, model, pla
       </section>
     </div>
 
-    <div className="player-card-section">
-      <div className="section-subhead"><strong>Matchday player cards</strong><span>Strength, uncertainty & form · newest result first</span></div>
-      <div className="player-card-columns">{sides.map(side => <div className={`player-card-team balance-players-${side.side.toLowerCase()}`} key={side.side}>
-        <span className="stat-label">{side.side === "A" ? "Blue" : "Red"} team · Team {side.side}</span>
-        {side.roster.map(({ player, rating, record }) => <article className="matchday-player-card" key={player.id}>
-          <div><strong>{displayName(player)}</strong><span>{Math.round(rating.rating)} strength · ±{Math.round(rating.uncertainty)}</span></div>
-          <div className="form-dots compact" aria-label={`${displayName(player)} recent form: ${record.form.slice(0, 5).join(", ") || "no games"}`}>
-            {Array.from({ length: 5 }, (_, index) => record.form[index] || "N").map((result, index) => <i className={result} key={index}>{result === "N" ? "–" : result}</i>)}
-          </div>
-          <small>{rating.appearances} games · {record.wins}-{record.draws}-{record.losses} W-D-L</small>
-          <small>{Math.round(player.mmr ?? 1000)} public MMR</small>
-        </article>)}
-      </div>)}</div>
-    </div>
-    <p className="balance-card-footnote">Estimated probabilities, not a guaranteed result. Player form and public MMR are shown for context and do not add extra bonuses to this selector.</p>
+    <MatchdayPlayerCards data={{ date, competition, blue: a.roster.map(playerCard), red: b.roster.map(playerCard) }} />
     {copyStatus ? <p role="status">{copyStatus}</p> : null}
   </section>;
 }
