@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { displayName, formatTeam, formatUkDate, makeNameMap, normalizeName, splitTeam, type Match, type Player } from "@/lib/demo-data";
-import { buildMatchdayBalance, matchdayOptions } from "@/lib/matchday-balance";
+import { buildMatchdayBalance, drawMatchdayOptions, matchdayOptions } from "@/lib/matchday-balance";
 import { BalanceMatchdayCard } from "@/components/balance-matchday-card";
 import { MatchDatePicker } from "@/components/match-date-picker";
 import { matchdayOutlook } from "@/lib/matchday-outlook";
@@ -14,6 +14,7 @@ function today() {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
+const newDrawSeed = () => Math.floor(Math.random() * 4294967296);
 
 export function BalancedMatchday({ players, selected, matches, locksA, locksB, onLock, onClearLocks, onReuseMemory, onEditLineup }: {
   players: Player[]; selected: Player[]; matches: Match[]; locksA: number[]; locksB: number[];
@@ -27,12 +28,15 @@ export function BalancedMatchday({ players, selected, matches, locksA, locksB, o
   const [chosenKey, setChosenKey] = useState("");
   const [showAll, setShowAll] = useState(false);
   const [copyMessage, setCopyMessage] = useState("");
+  const [drawSeed, setDrawSeed] = useState(0);
+  useEffect(() => { setDrawSeed(newDrawSeed()); }, []);
   const calculation = useMemo(() => {
     try { return { model: buildMatchdayBalance(players, matches, date), error: "" }; }
     catch (error) { return { model: null, error: error instanceof Error ? error.message : "Could not calculate teams." }; }
   }, [players, matches, date]);
   const model = calculation.model;
-  const options = useMemo(() => model ? matchdayOptions(model, selected, locksA, locksB) : [], [model, selected, locksA, locksB]);
+  const rankedOptions = useMemo(() => model ? matchdayOptions(model, selected, locksA, locksB) : [], [model, selected, locksA, locksB]);
+  const options = useMemo(() => drawMatchdayOptions(rankedOptions, locksA, locksB, drawSeed), [rankedOptions, locksA, locksB, drawSeed]);
   const chosen = options.find(option => option.key === chosenKey) || options[0];
   const ratings = new Map(model?.ratings.map(row => [row.playerId, row]));
   const names = makeNameMap(players);
@@ -72,9 +76,15 @@ export function BalancedMatchday({ players, selected, matches, locksA, locksB, o
       <section className="matchday-generator-grid">
         <div className="panel recommendation-panel" id="balance-recommendations">
           <div className="panel-title-row"><div><span className="stat-label">{options.length} possible splits</span><h2>Recommended Teams</h2></div>
-            <button className="ghost-button" type="button" onClick={() => setShowAll(value => !value)}>{showAll ? "Show shortlist" : `View all ${options.length}`}</button>
+            <div className="balance-card-actions">
+              <button className="ghost-button" type="button" disabled={!options.length} onClick={() => { setDrawSeed(newDrawSeed()); setCopyMessage(""); }}>
+                {locksA.length || locksB.length ? "Shuffle player order" : "Shuffle colours & order"}
+              </button>
+              <button className="ghost-button" type="button" onClick={() => setShowAll(value => !value)}>{showAll ? "Show shortlist" : `View all ${options.length}`}</button>
+            </div>
           </div>
           <p className="muted">Ranked by estimated close-game chance. Within each one-percentage-point band, known positions and recent team variety decide the order.</p>
+          <p className="muted">Colours and player order are shuffled. Side locks are always kept.</p>
           {!options.length ? <p role="alert">These locks cannot make two teams of five. Release a lock to continue.</p> : null}
           <div className="recommendation-list">
             {(showAll ? options : options.slice(0, 4)).map((option, index) => <button key={option.key} type="button" aria-pressed={chosen?.key === option.key}
