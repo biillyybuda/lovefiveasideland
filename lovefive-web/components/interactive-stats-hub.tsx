@@ -1,5 +1,6 @@
 "use client";
 
+import { useCompetitionLabels } from "./cup-name-provider";
 import { useMemo, useState } from "react";
 import { InteractiveCharts } from "@/components/interactive-charts";
 import { InteractiveChemistry } from "@/components/interactive-chemistry";
@@ -9,7 +10,7 @@ import { buildPlayerSummaries, duoChemistry, type Match, type MmrHistory, type P
 import { applyPeriodMmr } from "@/lib/mmr-engine";
 import { LeagueHealthActivity } from "@/components/health-activity";
 import { buildHealthStats, type HealthContext, type HealthLoadState } from "@/lib/health-stats";
-import { selectMatches, competitionLabels } from "@/lib/competition";
+import { selectMatches } from "@/lib/competition";
 import { CompetitionControl, useCompetition } from "@/components/competition-control";
 import { ShieldRecords } from "@/components/shield-records";
 
@@ -41,6 +42,7 @@ export function InteractiveStatsHub({
   mmrHistory: MmrHistory[];
   health?: { leagueId: number; players: Player[]; load: HealthLoadState; reload: () => void; canEdit: boolean };
 }) {
+  const competitionLabels = useCompetitionLabels();
   const [competition, setCompetition] = useCompetition(initialCompetition);
   const seasons = useMemo(() => ["all", ...Array.from(new Set(matches.map((match) => String(match.date || "").slice(0, 4))))], [matches]);
   const [season, setSeason] = useState(() => initialSeason && seasons.includes(initialSeason) ? initialSeason : "all");

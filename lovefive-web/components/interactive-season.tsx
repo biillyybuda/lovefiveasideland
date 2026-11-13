@@ -494,7 +494,7 @@ function sortMarker(current: SeasonSortKey, direction: "asc" | "desc", key: Seas
 export function InteractiveSeason(props: { players: Player[]; historicalPlayers?: Player[]; matches: Match[]; mmrHistory: MmrHistory[] }) {
   const [competition, setCompetition] = useCompetition();
   if (competition !== "league") return <div className="interactive-stack">
-    <p className="competition-note">Official season awards use League matches only. Explore {competition === "all" ? "combined career records" : "Shield honours and records"} below.</p>
+    <p className="competition-note">Official season awards use League matches only. Explore {competition === "all" ? "combined career records" : "Cup honours and records"} below.</p>
     <InteractiveStatsHub {...props} initialCompetition={competition} />
   </div>;
   return <><div className="control-bar"><CompetitionControl value={competition} onChange={setCompetition}/></div>

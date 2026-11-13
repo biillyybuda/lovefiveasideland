@@ -1,3 +1,5 @@
+import { loadCupNames } from "./cup-settings";
+import { cupName } from "./competition";
 import { loadAllPages } from "./pagination";
 import { loadCompletedMatches } from "./match-loader";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
@@ -67,9 +69,11 @@ export async function loadMyLeagues(supabase: SupabaseClient, user: User): Promi
 
   if (leagueError) throw new Error(leagueError.message);
 
+  const cupNames = await loadCupNames(supabase, leagueIds);
   const roleMap = new Map(rows.map((row) => [row.league_id, row.role]));
   return ((leagueRows || []) as League[]).map((league) => ({
     ...league,
+    cup_name: cupName(cupNames.get(league.id)),
     role: roleMap.get(league.id) || "member"
   }));
 }

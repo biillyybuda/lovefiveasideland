@@ -13,7 +13,7 @@ export type ResultRebuildSummary = { processedMatches: number; ratedMatches: num
 
 function ratingDatabaseError(error: { code?: string; message: string }) {
   const missingObject = ["PGRST202", "PGRST204", "PGRST205", "42P01", "42703", "42883"].includes(error.code || "");
-  if (missingObject && /commit_competition_rating_run|competition/.test(error.message)) return new Error("Shield support needs the MMR Immunity Shield database migration. No result has been saved.");
+  if (missingObject && /commit_competition_rating_run|competition/.test(error.message)) return new Error("Cup support needs the cup competition database migration. No result has been saved.");
   const ratingObject = /\b(rating_runs|rating_workspace|commit_rating_run|rating_adjustments|balance_model_states|initial_mmr|selection_source)\b/.test(error.message);
   if (missingObject && ratingObject) {
     return new Error("Result saving needs a database update. Apply supabase/migrations/20260908080902_mmr_v2_foundation.sql " +

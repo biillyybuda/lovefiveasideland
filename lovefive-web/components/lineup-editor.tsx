@@ -1,5 +1,6 @@
 "use client";
 
+import { useCompetitionLabels } from "./cup-name-provider";
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { ArrowLeftRight, LockKeyhole, RotateCcw, Sparkles, Unlock, X } from "lucide-react";
 import { displayName, type Match, type Player } from "@/lib/demo-data";
@@ -7,7 +8,7 @@ import { buildMatchdayBalance, matchdayOptions } from "@/lib/matchday-balance";
 import { predictBalance } from "@/lib/balance-model";
 import { FORMATIONS, LINK_COLOURS, PITCH, ROLE_NAMES, SIDES, buildLineupChemistry, initialLineup, isFormation, lineupLinks, lineupText, playerLink, savedRole, shieldName, suggestTeam, swapLineupColours, swapLineupPlayers, validateDraft, type Chemistry, type FormationId, type LineupDraft, type LineupSeed, type Role, type Side, type TeamLineup } from "@/lib/lineup-editor";
 import { SHIELD_PATH, SHIRT_PATH, TEAM_COLOURS, createFormationPoster } from "@/lib/lineup-poster";
-import { competitionLabels, matchCompetition, type Competition } from "@/lib/competition";
+import { matchCompetition, type Competition } from "@/lib/competition";
 import { LineupImageButton } from "@/components/lineup-image-button";
 
 type Target = { side: Side; index: number };
@@ -81,6 +82,7 @@ export function LineupEditor({ players, modelPlayers, matches, selected, seed, s
   players: Player[]; modelPlayers: Player[]; matches: Match[]; selected: Player[]; seed: LineupSeed | null;
   storageKey: string; onSelectionChange: (ids: number[]) => void; sideLocks: { blue: number[]; red: number[] };
 }) {
+  const competitionLabels = useCompetitionLabels();
   const [draft, setDraft] = useState<LineupDraft | null>(null);
   const [date, setDate] = useState(seed?.date || today);
   const [ready, setReady] = useState(false);
@@ -220,8 +222,8 @@ export function LineupEditor({ players, modelPlayers, matches, selected, seed, s
       </div>
       <p className="muted">Drag a card onto another to swap, or tap one player then another. Tap a link for their shared record.</p>
       {usable && draft ? <>
-        <label><span>Fixture competition</span><select value={matchCompetition(draft)} onChange={event => act(() => commit({ ...draft, competition: event.target.value as Competition }, "Fixture competition updated."))}><option value="league">League</option><option value="immunity_shield">MMR Immunity Shield</option></select></label>
-        {draft.competition === "immunity_shield" && <p className="competition-note">MMR protected. A draw awards no Shield.</p>}
+        <label><span>Fixture competition</span><select value={matchCompetition(draft)} onChange={event => act(() => commit({ ...draft, competition: event.target.value as Competition }, "Fixture competition updated."))}><option value="league">League</option><option value="immunity_shield">{competitionLabels.immunity_shield}</option></select></label>
+        {draft.competition === "immunity_shield" && <p className="competition-note">MMR protected. A draw awards no trophy.</p>}
         <div className="lineup-actions">
           <button type="button" className="primary-button" onClick={suggest} disabled={!calculation.chemistry}><Sparkles size={16} />Suggest positions</button>
           <button type="button" className="ghost-button" onClick={() => act(() => commit(swapLineupColours(draft), "Team colours swapped. Forecast updated."))}><ArrowLeftRight size={16} />Swap team colours</button>
@@ -229,12 +231,12 @@ export function LineupEditor({ players, modelPlayers, matches, selected, seed, s
             const previous = history.current.pop(); if (previous) { setDraft(previous); setDate(previous.date); setChosen(null); setPair(null); setError(""); setMessage("Last change undone."); }
           }}><RotateCcw size={16} />Undo</button>
           <button type="button" className="ghost-button" onClick={async () => {
-            try { await navigator.clipboard.writeText(lineupText(draft, players)); setMessage("Lineup copied."); } catch { setError("Copy is unavailable. Use Save lineup image instead."); }
+            try { await navigator.clipboard.writeText(lineupText(draft, players, competitionLabels.immunity_shield)); setMessage("Lineup copied."); } catch { setError("Copy is unavailable. Use Save lineup image instead."); }
           }}>Copy lineup</button>
           {forecast && calculation.chemistry && !calculation.error ? <LineupImageButton
-            key={JSON.stringify({ draft, forecast: [forecast.win, forecast.draw, forecast.loss], players: draft.blue.ids.concat(draft.red.ids).map(id => [id, byId.get(id)?.mmr, displayName(byId.get(id)!)]) })}
+            key={competitionLabels.immunity_shield + JSON.stringify({ draft, forecast: [forecast.win, forecast.draw, forecast.loss], players: draft.blue.ids.concat(draft.red.ids).map(id => [id, byId.get(id)?.mmr, displayName(byId.get(id)!)]) })}
             data={{ date: draft.date, blue: draft.blue.ids.map(id => displayName(byId.get(id)!)), red: draft.red.ids.map(id => displayName(byId.get(id)!)), forecast }}
-            renderImage={() => createFormationPoster({ draft, players, chemistry: calculation.chemistry!, forecast })} /> : null}
+            renderImage={() => createFormationPoster({ cupName: competitionLabels.immunity_shield, draft, players, chemistry: calculation.chemistry!, forecast })} /> : null}
         </div>
         <div className="lineup-team-settings">
           {SIDES.map(side => {

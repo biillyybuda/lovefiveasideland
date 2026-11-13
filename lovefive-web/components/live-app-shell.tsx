@@ -2,6 +2,7 @@
 
 import { CompetitionLink as Link } from "@/components/competition-control";
 import { usePathname, useRouter } from "next/navigation";
+import { CupNameProvider } from "./cup-name-provider";
 import { BrandMark } from "@/components/brand-mark";
 import { SetupChecklist } from "@/components/setup-checklist";
 import { getBrowserSupabase } from "@/lib/auth-client";
@@ -36,7 +37,7 @@ export function LiveAppShell({
   }
 
   return (
-    <div className="shell">
+    <CupNameProvider key={league.id} name={league.cup_name}><div className="shell">
       <header className="site-header">
         <div className="site-header-inner">
           <Link className="site-brand" href="/">
@@ -64,6 +65,7 @@ export function LiveAppShell({
                 </div>
                 <button className="profile-action" type="button" onClick={changeLeague}>Change league</button>
                 <Link href="/app/join-invite">Join / Invite</Link>
+                {admin ? <Link href="/app/admin-tools">Admin Tools</Link> : null}
                 {admin ? <Link href="/app/admin-tools/add-result">Add Result</Link> : null}
                 {admin ? <Link href="/app/admin-tools/player-management">Player Management</Link> : null}
                 <button className="profile-action" type="button" onClick={signOut}>Sign out</button>
@@ -82,6 +84,6 @@ export function LiveAppShell({
         />
         {children}
       </main>
-    </div>
+    </div></CupNameProvider>
   );
 }

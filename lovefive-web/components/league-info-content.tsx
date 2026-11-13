@@ -1,3 +1,6 @@
+"use client";
+
+import { useCompetitionLabels } from "./cup-name-provider";
 export function LeagueInfoContent({
   liveLeagueName,
   demo = false
@@ -5,12 +8,13 @@ export function LeagueInfoContent({
   liveLeagueName?: string;
   demo?: boolean;
 }) {
+  const labels = useCompetitionLabels();
   return (
     <section className="info-grid">
       <details open>
-        <summary>League &amp; MMR Immunity Shield</summary>
-        <p>League fixtures count towards public MMR and league season awards. Each Shield fixture is a standalone final: the winning players each earn one Shield. A draw stays a draw and nobody wins a Shield.</p>
-        <p>Use League, MMR Immunity Shield or All competitions beside the season filter to explore records, partnerships and activity. Both competitions help balance future teams. Shield results never change league MMR or league awards.</p>
+        <summary>League &amp; {labels.immunity_shield}</summary>
+        <p>League fixtures count towards public MMR and league season awards. Each cup fixture is a standalone final: the winning players each earn one cup win. A draw stays a draw and nobody wins a trophy.</p>
+        <p>Use League, {labels.immunity_shield} or All competitions beside the season filter to explore records, partnerships and activity. Both competitions help balance future teams. Cup results never change league MMR or league awards.</p>
         <p>Admins choose the competition when recording a result. The competition controls what counts, regardless of the day it was played.</p>
       </details>
       <details open>

@@ -1,7 +1,8 @@
-import { competitionLabels, type Competition } from "./competition";
+import { getCompetitionLabels, type Competition } from "./competition";
 
 export type LineupImageData = {
   competition?: Competition;
+  cupName?: string;
   date: string;
   blue: readonly string[];
   red: readonly string[];
@@ -77,7 +78,7 @@ export function drawLineupImage(canvas: HTMLCanvasElement, data: LineupImageData
     ctx!.restore();
   }
   function fitted(value: string, x: number, y: number, size: number, maxWidth: number, colour?: string, weight: FontWeight = 500) {
-    while (size > 20) {
+    while (size > 7) {
       ctx!.font = `${weight} ${size}px ${FONT}`;
       if (ctx!.measureText(value).width <= maxWidth) break;
       size -= 1;
@@ -107,7 +108,7 @@ export function drawLineupImage(canvas: HTMLCanvasElement, data: LineupImageData
   ctx.fillStyle = header; ctx.fillRect(28, 28, 1024, 252);
   rectangle(28, 28, 512, 8, "#438fff"); rectangle(540, 28, 512, 8, "#ff5672");
   text("LOVE FIVE", 54, 83, 26, "#b7c7dd", 500, 4);
-  fitted(data.competition ? competitionLabels[data.competition].toUpperCase() : "MATCHDAY LINEUPS", 54, 158, 68, 966, "#fff", 600);
+  fitted(data.competition ? getCompetitionLabels(data.cupName)[data.competition].toUpperCase() : "MATCHDAY LINEUPS", 54, 158, 68, 966, "#fff", 600);
   const dateLabel = date.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
   fitted(dateLabel.toUpperCase(), 54, 228, 40, 966, "#e0e8f4");
 

@@ -3,9 +3,27 @@ import type { Match, Player } from "./demo-data";
 export type Competition = "league" | "immunity_shield";
 export type CompetitionScope = Competition | "all";
 export const COMPETITION_POLICY = "league-shield-v1";
-export const competitionLabels: Record<CompetitionScope, string> = {
-  league: "League", immunity_shield: "MMR Immunity Shield", all: "All competitions"
-};
+export const DEFAULT_CUP_NAME = "Slimfast Cup";
+export const MAX_CUP_NAME_LENGTH = 80;
+
+export function cupName(value?: string | null) {
+  return value?.trim().replace(/\s+/g, " ") || DEFAULT_CUP_NAME;
+}
+
+export function validateCupName(value: string) {
+  const name = value.trim().replace(/\s+/g, " ");
+  if (!name) throw new Error("Enter a cup name.");
+  if (Array.from(name).length > MAX_CUP_NAME_LENGTH) throw new Error(`Use ${MAX_CUP_NAME_LENGTH} characters or fewer.`);
+  if (/[\p{Cc}\p{Cf}]/u.test(name.replace(/[\u200c\u200d]/g, ""))) throw new Error("Use a cup name without control characters.");
+  return name;
+}
+
+export function getCompetitionLabels(name?: string | null): Record<CompetitionScope, string> {
+  return { league: "League", immunity_shield: cupName(name), all: "All competitions" };
+}
+
+// Defaults for demo/server callers; live callers pass the league setting explicitly.
+export const competitionLabels = getCompetitionLabels();
 
 /** Missing fields are legacy league records. Unknown values must never become rated games. */
 export function matchCompetition(match: Pick<Match, "competition">): Competition {

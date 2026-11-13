@@ -80,7 +80,7 @@ test('reports keep league milestones separate, show Shield honours and use both 
   assert.deepEqual(leagueReport.changes,baseline.changes);
   assert.notDeepEqual(leagueReport.rating.prediction,baseline.rating.prediction);
   const report=buildMatchReport({match:shield,matches:all,players:fixture.players,mmrHistory:[]});
-  assert.match(report.headline,/win the MMR Immunity Shield/);
+  assert.match(report.headline,/win the Slimfast Cup/);
   assert.equal(report.changes.length,5);
   assert.equal(report.matchNumber,1);
   const draw={...shield,score:'7-7'};

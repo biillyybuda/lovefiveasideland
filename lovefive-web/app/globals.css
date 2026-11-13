@@ -5885,3 +5885,9 @@ tr:last-child td {
   .competition-stats > .stats-toolbar { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .competition-control { width: 100%; }
 }
+
+.cup-name-settings { margin-bottom: 24px; }
+.cup-name-settings form { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.cup-name-settings input { flex: 1 1 240px; min-width: 0; }
+.cup-name-settings, .broadcast-heading h3, .formation-board-heading h2, .form-cup-legend, .review-hero h1 { overflow-wrap: anywhere; }
+.broadcast-heading > div { min-width: 0; }

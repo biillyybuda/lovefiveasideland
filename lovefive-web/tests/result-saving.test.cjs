@@ -29,7 +29,7 @@ function client({ priorError = null, priorData = null, workspaceError = null, co
   };
 }
 
-const migrationMessage = /Apply supabase\/migrations\/20260908080902_mmr_v2_foundation\.sql|MMR Immunity Shield database migration/;
+const migrationMessage = /Apply supabase\/migrations\/20260908080902_mmr_v2_foundation\.sql|cup competition database migration/;
 
 for (const code of ['PGRST205', '42P01']) {
   test(`missing rating_runs (${code}) explains setup and stops before a write`, async () => {

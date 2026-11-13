@@ -219,16 +219,16 @@ retry handling. Older clients that omit these fields preserve saved readings;
 explicit null clears an individual field. Existing rows remain unchanged apart
 from the new null columns. No matchmaking or fitness-score rules are introduced.
 
-## MMR Immunity Shield
+## Slimfast Cup
 
 Released from `main` on 22 September 2026. The website is live on Render and the
 matching database migration is installed in the shared LoveFive project.
-Refresh existing admin pages before recording a result. Choose League or MMR Immunity Shield.
+Refresh existing admin pages before recording a result. Choose League or Slimfast Cup.
 League alone changes public MMR and official season awards. Both competitions
 train team balancing. A Shield win awards one honour to each winning player;
 a draw stays a draw and awards nobody a Shield.
 
-The shared League / MMR Immunity Shield / All competitions filter scopes Home,
+The shared League / Slimfast Cup / All competitions filter scopes Home,
 Stats Centre and Season Review. Goals, assists, form, relationships and activity
 use the selected matches. Honours derive from results, so edits and deletions
 correct them automatically. Match reports, copied lineups and exported lineup
@@ -245,3 +245,9 @@ Run `npm test` and `npm run build` before release. Competition tests include a
 local PostgreSQL integration test using PGlite; they never write to Supabase.
 See `../docs/mmr-immunity-shield-plan-2026-09-22.md` for verified rules and the
 coordinated release procedure.
+
+### Cup display name
+
+Apply `supabase/migrations/20261113102203_league_cup_settings.sql` before deploying this version. The default cup name is **Slimfast Cup**. Active league owners/admins can change it under **Admin Tools → Cup name** (also reachable from the profile menu). The setting is stored per league and used by competition selectors, records, match reports and screenshot views, copied lineups, lineup PNGs, formation posters, and player-card PNGs/legends. Reopen a page after another admin changes the name. Previously downloaded images need to be generated again.
+
+Names must contain 1–80 characters; whitespace is normalised. Database RLS allows active members to read their league setting and only active owners/admins to save it. The internal `immunity_shield` competition key and all MMR/award rules remain unchanged.

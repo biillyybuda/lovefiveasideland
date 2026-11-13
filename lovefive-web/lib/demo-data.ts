@@ -14,6 +14,7 @@ export type League = {
   id: number;
   name: string;
   join_code: string | null;
+  cup_name?: string;
 };
 
 export type Player = {
