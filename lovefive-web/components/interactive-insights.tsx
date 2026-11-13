@@ -109,7 +109,7 @@ export function InteractiveInsights({
               <div className="profile-grid">
                 {competition !== "immunity_shield" && <><div><span>League MMR</span><strong>{Math.round(selected.mmr || 0)}</strong></div>
                 <div><span>League MMR change</span><strong>{formatDelta(selected.periodMmrChange)}</strong></div></>}
-                {competition !== "league" && <div><span>Shields won</span><strong>{selected.shieldWins}</strong></div>}
+                {competition !== "league" && <div><span>Cups won</span><strong>{selected.shieldWins}</strong></div>}
                 <div><span>Recorded goals</span><strong>{selected.style_source?.stats.some(row => row.goals != null) ? selected.style_profile?.historicGoals : "—"}</strong></div>
                 <div><span>Recorded assists</span><strong>{selected.style_source?.stats.some(row => row.assists != null) ? selected.style_profile?.historicAssists : "—"}</strong></div>
                 <div><span>Record</span><strong>{selected.wins || 0}-{selected.draws || 0}-{selected.losses || 0}</strong></div>

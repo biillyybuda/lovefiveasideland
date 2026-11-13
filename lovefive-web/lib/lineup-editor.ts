@@ -1,6 +1,6 @@
 import { displayName, scoreParts, type Match, type Player } from "./demo-data";
 import { matchDay, resolveLineup } from "./balance-model";
-import { matchCompetition, competitionLabels, type Competition } from "./competition";
+import { matchCompetition, getCompetitionLabels, type Competition } from "./competition";
 
 export type Role = "GK" | "DF" | "MF" | "ST";
 export type Side = "blue" | "red";
@@ -194,7 +194,7 @@ export function shieldName(name: string) {
   return { lines: lines.length ? lines : ["PLAYER"], size: Math.min(20, 48 / Math.max(1, lines.length), letters.length > 14 ? 18 : 20) };
 }
 
-export function lineupText(draft: LineupDraft, players: Player[]) {
+export function lineupText(draft: LineupDraft, players: Player[], cupName?: string) {
   const byId = new Map(players.map(p => [p.id, p]));
-  return `LOVE FIVE · ${competitionLabels[matchCompetition(draft)]} · ${draft.date}${draft.competition === "immunity_shield" ? " · MMR protected; a draw awards no Shield" : ""}\n\n${SIDES.map(side => `${side === "blue" ? "🔵 BLUE" : "🔴 RED"} TEAM · ${FORMATIONS[draft[side].formation].label}\n${draft[side].ids.map((id, index) => `${FORMATIONS[draft[side].formation].slots[index].role}: ${displayName(byId.get(id)!)}`).join("\n")}`).join("\n\n")}`;
+  return `LOVE FIVE · ${getCompetitionLabels(cupName)[matchCompetition(draft)]} · ${draft.date}${draft.competition === "immunity_shield" ? " · MMR protected; a draw awards no trophy" : ""}\n\n${SIDES.map(side => `${side === "blue" ? "🔵 BLUE" : "🔴 RED"} TEAM · ${FORMATIONS[draft[side].formation].label}\n${draft[side].ids.map((id, index) => `${FORMATIONS[draft[side].formation].slots[index].role}: ${displayName(byId.get(id)!)}`).join("\n")}`).join("\n\n")}`;
 }

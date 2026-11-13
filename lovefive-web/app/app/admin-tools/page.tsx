@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { CupNameSettings } from "@/components/cup-name-settings";
 import { LiveLeagueLoader } from "@/components/live-league-loader";
 
 export default function AppAdminToolsPage() {
   return (
     <LiveLeagueLoader active="admin" requireAdmin>
-      {() => (
+      {({ league }) => (
         <>
           <div className="page-head">
             <div>
@@ -14,6 +15,7 @@ export default function AppAdminToolsPage() {
               <h1>Admin Tools</h1>
             </div>
           </div>
+          <CupNameSettings key={league.id} league={league} />
           <div className="tool-grid">
             <Link className="panel tool-card-link" href="/app/admin-tools/add-result">
               <span>Match Management</span>

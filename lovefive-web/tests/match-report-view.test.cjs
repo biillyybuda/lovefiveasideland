@@ -34,8 +34,8 @@ test('drawn Shield reports and share views award nobody and link back to Shield 
   const report=buildMatchReport({match,matches:[match],players,mmrHistory:[]});
   for(const share of [false,true]) {
     const html=renderToStaticMarkup(React.createElement(MatchReportContent,{report,share}));
-    assert.ok(html.includes('nobody wins the Shield'));
-    assert.ok(html.includes('Draw — no Shield awarded'));
+    assert.ok(html.includes('nobody wins the cup'));
+    assert.ok(html.includes('Draw — no trophy awarded'));
     assert.ok(html.includes('MMR protected'));
     assert.ok(html.includes('competition=immunity_shield'));
     assert.ok(!html.includes('Recorded pre-match public MMR'));

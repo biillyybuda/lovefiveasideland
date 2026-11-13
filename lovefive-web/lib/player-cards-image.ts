@@ -1,4 +1,4 @@
-import { competitionLabels, type Competition } from "./competition";
+import { getCompetitionLabels, type Competition } from "./competition";
 import { layoutLineupName } from "./lineup-image";
 
 export type PlayerCardData = {
@@ -10,8 +10,8 @@ export type PlayerCardData = {
   losses: number;
   form: { result: "W" | "D" | "L"; shield: boolean; date: string | null }[];
 };
-export type PlayerCardsImageData = { date: string; competition: Competition; blue: PlayerCardData[]; red: PlayerCardData[] };
-export const SHIELD_FORM_LEGEND = "Gold outline = Immunity Shield Game";
+export type PlayerCardsImageData = { cupName?: string; date: string; competition: Competition; blue: PlayerCardData[]; red: PlayerCardData[] };
+export function cupFormLegend(name?: string) { return `Gold outline = ${getCompetitionLabels(name).immunity_shield} game`; }
 const FONT = '"Lineup Inter", Arial, sans-serif';
 
 /** A portrait export uses the same card data as the page, at a fixed readable size. */
@@ -38,7 +38,7 @@ export function drawPlayerCardsImage(canvas: HTMLCanvasElement, data: PlayerCard
   }
   function text(value: string, x: number, y: number, size: number, colour = "#f3f7ff", weight = 500, maxWidth?: number) {
     ctx!.font = `${weight} ${size}px ${FONT}`;
-    while (maxWidth && ctx!.measureText(value).width > maxWidth && size > 16) { size--; ctx!.font = `${weight} ${size}px ${FONT}`; }
+    while (maxWidth && ctx!.measureText(value).width > maxWidth && size > 7) { size--; ctx!.font = `${weight} ${size}px ${FONT}`; }
     ctx!.fillStyle = colour; ctx!.fillText(value, x, y);
   }
   const muted = "#aebfd2", gold = "#edcf80";
@@ -48,7 +48,7 @@ export function drawPlayerCardsImage(canvas: HTMLCanvasElement, data: PlayerCard
   ctx.fillStyle = header; ctx.fillRect(0, 0, 1200, 184);
   box(40, 24, 560, 4, "#66adff"); box(600, 24, 560, 4, "#ff7f96");
   text("LOVE FIVE", 48, 65, 23, muted, 600);
-  ctx.textAlign = "right"; text(competitionLabels[data.competition].toUpperCase(), 1152, 65, 21, muted, 600); ctx.textAlign = "left";
+  ctx.textAlign = "right"; text(getCompetitionLabels(data.cupName)[data.competition].toUpperCase(), 1152, 65, 21, muted, 600, 850); ctx.textAlign = "left";
   text("Matchday player cards", 48, 119, 51, "#ffffff", 600);
   text(date.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }), 48, 158, 25, muted);
 
@@ -80,7 +80,7 @@ export function drawPlayerCardsImage(canvas: HTMLCanvasElement, data: PlayerCard
   box(42, bottom + 33, 26, 26, "#172337", 6, gold);
   ctx.strokeStyle = gold; ctx.lineWidth = 2; ctx.beginPath();
   ctx.moveTo(49, bottom + 39); ctx.lineTo(55, bottom + 37); ctx.lineTo(61, bottom + 39); ctx.lineTo(61, bottom + 46); ctx.quadraticCurveTo(59, bottom + 51, 55, bottom + 54); ctx.quadraticCurveTo(51, bottom + 51, 49, bottom + 46); ctx.closePath(); ctx.stroke();
-  text(SHIELD_FORM_LEGEND, 82, bottom + 54, 23, muted);
+  text(cupFormLegend(data.cupName), 82, bottom + 54, 23, muted, 500, 1076);
 }
 
 export async function createPlayerCardsImage(data: PlayerCardsImageData) {

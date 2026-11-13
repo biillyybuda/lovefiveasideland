@@ -1,10 +1,11 @@
 "use client";
 
+import { useCompetitionLabels } from "./cup-name-provider";
 import { useMemo } from "react";
 import { Shirt } from "lucide-react";
 import { buildPlayerSummaries, displayName, type Player } from "@/lib/demo-data";
 import { compareMatches, resolveLineup, type BalanceOption } from "@/lib/balance-model";
-import { competitionLabels, matchCompetition, type Competition } from "@/lib/competition";
+import { matchCompetition, type Competition } from "@/lib/competition";
 import type { buildMatchdayBalance } from "@/lib/matchday-balance";
 import { LineupImageButton } from "@/components/lineup-image-button";
 import { MatchDatePicker } from "@/components/match-date-picker";
@@ -26,6 +27,7 @@ export function BalanceMatchdayCard({ competition = "league", option, model, pla
   onEditLineup?: () => void;
   onDateChange: (date: string) => void;
 }) {
+  const competitionLabels = useCompetitionLabels();
   const context = useMemo(() => {
     const byId = new Map(players.map(player => [player.id, player]));
     // Use the same resolved identities and date cutoff as the forecast. These
@@ -66,7 +68,7 @@ export function BalanceMatchdayCard({ competition = "league", option, model, pla
   const prediction = option.prediction;
   const gap = Math.abs(prediction.meanMargin);
   const favourite = prediction.win >= prediction.loss ? "Blue team" : "Red team";
-  const imageData = { competition, date, blue: a.team.map(displayName), red: b.team.map(displayName), forecast: { win: prediction.win, draw: prediction.draw, loss: prediction.loss } };
+  const imageData = { cupName: competitionLabels.immunity_shield, competition, date, blue: a.team.map(displayName), red: b.team.map(displayName), forecast: { win: prediction.win, draw: prediction.draw, loss: prediction.loss } };
   const comparisons = [
     { label: "Team strength", a: a.strength, b: b.strength, left: Math.round(a.strength), right: Math.round(b.strength) },
     { label: "Avg uncertainty", a: a.uncertainty, b: b.uncertainty, left: `±${Math.round(a.uncertainty)}`, right: `±${Math.round(b.uncertainty)}` },

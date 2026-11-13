@@ -1,12 +1,13 @@
 "use client";
 
+import { useCompetitionLabels } from "./cup-name-provider";
 import { useEffect, useMemo, useState } from "react";
 import { displayName, formatTeam, formatUkDate, makeNameMap, normalizeName, splitTeam, type Match, type Player } from "@/lib/demo-data";
 import { buildMatchdayBalance, drawMatchdayOptions, matchdayOptions } from "@/lib/matchday-balance";
 import { BalanceMatchdayCard } from "@/components/balance-matchday-card";
 import { MatchDatePicker } from "@/components/match-date-picker";
 import { matchdayOutlook } from "@/lib/matchday-outlook";
-import { competitionLabels, type Competition } from "@/lib/competition";
+import { type Competition } from "@/lib/competition";
 import type { LineupSeed } from "@/lib/lineup-editor";
 
 function today() {
@@ -23,6 +24,7 @@ export function BalancedMatchday({ players, selected, matches, locksA, locksB, o
   onReuseMemory: (match: Match) => void;
   onEditLineup?: (seed: LineupSeed) => void;
 }) {
+  const competitionLabels = useCompetitionLabels();
   const [competition, setCompetition] = useState<Competition>("league");
   const [date, setDate] = useState(today);
   const [chosenKey, setChosenKey] = useState("");
@@ -56,7 +58,7 @@ export function BalancedMatchday({ players, selected, matches, locksA, locksB, o
   async function copyTeams() {
     if (!chosen) return;
     try {
-      await navigator.clipboard.writeText(`Love Five · ${competitionLabels[competition]} · ${formatUkDate(date)}${competition === "immunity_shield" ? " · MMR protected; a draw awards no Shield" : ""}\n\n🔵 Blue team (Team A): ${chosen.teamA.map(displayName).join(", ")}\n\n🔴 Red team (Team B): ${chosen.teamB.map(displayName).join(", ")}\n\n${matchdayOutlook(chosen.prediction)}\nEstimated results: Blue win ${percent(chosen.prediction.win)} · Draw ${percent(chosen.prediction.draw)} · Red win ${percent(chosen.prediction.loss)}\nFinish within 2 goals: ${percent(chosen.prediction.close)} (draw, or either team wins by 1–2).`);
+      await navigator.clipboard.writeText(`Love Five · ${competitionLabels[competition]} · ${formatUkDate(date)}${competition === "immunity_shield" ? " · MMR protected; a draw awards no trophy" : ""}\n\n🔵 Blue team (Team A): ${chosen.teamA.map(displayName).join(", ")}\n\n🔴 Red team (Team B): ${chosen.teamB.map(displayName).join(", ")}\n\n${matchdayOutlook(chosen.prediction)}\nEstimated results: Blue win ${percent(chosen.prediction.win)} · Draw ${percent(chosen.prediction.draw)} · Red win ${percent(chosen.prediction.loss)}\nFinish within 2 goals: ${percent(chosen.prediction.close)} (draw, or either team wins by 1–2).`);
       setCopyMessage(selectionKey);
     } catch { setCopyMessage("Copy unavailable. You can select and copy the team names below."); }
   }
@@ -64,10 +66,10 @@ export function BalancedMatchday({ players, selected, matches, locksA, locksB, o
   return <div className="interactive-stack balance-default">
     <section className="panel">
       <div className="panel-title-row"><div><span className="stat-label">Team balancing</span><h2>Strength + uncertainty</h2></div>
-        <label><span>Fixture competition</span><select value={competition} onChange={event => setCompetition(event.target.value as Competition)}><option value="league">League</option><option value="immunity_shield">MMR Immunity Shield</option></select></label>
+        <label><span>Fixture competition</span><select value={competition} onChange={event => setCompetition(event.target.value as Competition)}><option value="league">League</option><option value="immunity_shield">{competitionLabels.immunity_shield}</option></select></label>
         <MatchDatePicker date={date} onChange={changeDate} />
       </div>
-      <p className="muted">League and Shield results both help balance teams. Public MMR and season awards use league results only. {competition === "immunity_shield" ? "This fixture has MMR immunity; a draw awards no Shield." : "This is a rated league fixture."}</p>
+      <p className="muted">League and cup results both help balance teams. Public MMR and season awards use league results only. {competition === "immunity_shield" ? "This fixture has MMR immunity; a draw awards no trophy." : "This is a rated league fixture."}</p>
       {model ? <small className="muted">Based on {model.history.length} completed games on or before {formatUkDate(date)}. A close game means a draw or a win by one or two goals.</small> : null}
       {calculation.error ? <p role="alert">{calculation.error} Check the date or ask a league admin to correct the match history.</p> : null}
     </section>

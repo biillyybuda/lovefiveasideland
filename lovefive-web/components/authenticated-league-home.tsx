@@ -33,7 +33,7 @@ import {
 } from "@/lib/live-data";
 
 import { CompetitionControl, useCompetition } from "@/components/competition-control";
-import { selectMatches, competitionLabels } from "@/lib/competition";
+import { selectMatches, getCompetitionLabels } from "@/lib/competition";
 import { ShieldRecords } from "@/components/shield-records";
 
 type LoadState = "auth" | "select" | "loading" | "ready" | "empty" | "error";
@@ -53,6 +53,7 @@ export function AuthenticatedLeagueHome() {
   const [message, setMessage] = useState("");
 
   const selectedLeague = leagues.find((league) => league.id === leagueId) || null;
+  const competitionLabels = getCompetitionLabels(selectedLeague?.cup_name);
   const admin = isAdminRole(selectedLeague?.role);
 
   const bootstrap = useCallback(async (activeUser: User) => {

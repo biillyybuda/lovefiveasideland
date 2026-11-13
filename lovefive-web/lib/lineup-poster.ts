@@ -1,11 +1,11 @@
 import { displayName, type Player } from "./demo-data";
-import { competitionLabels, matchCompetition } from "./competition";
+import { getCompetitionLabels, matchCompetition } from "./competition";
 import { FORMATIONS, LINK_COLOURS, PITCH, SIDES, lineupLinks, shieldName, validateDraft, type Chemistry, type LineupDraft, type Side } from "./lineup-editor";
 
 export const SHIELD_PATH = "M0 -94 L16 -84 L69 -65 L69 67 L0 94 L-69 67 L-69 -65 L-16 -84 Z";
 export const SHIRT_PATH = "M8 2 Q12 8 16 2 L20 4 L24 9 L20 12 L18 9 L18 25 L6 25 L6 9 L4 12 L0 9 L4 4 Z";
 export const TEAM_COLOURS = { blue: { accent: "#54a6ff", banner: "#145bbd", dark: "#102745" }, red: { accent: "#ff5475", banner: "#ad2145", dark: "#301c30" } };
-export type FormationPosterData = { draft: LineupDraft; players: Player[]; chemistry: Chemistry; forecast: { win: number; draw: number; loss: number } };
+export type FormationPosterData = { cupName?: string; draft: LineupDraft; players: Player[]; chemistry: Chemistry; forecast: { win: number; draw: number; loss: number } };
 const FONT = '"Lineup Inter", Arial, sans-serif';
 
 export function drawFormationPoster(canvas: HTMLCanvasElement, data: FormationPosterData) {
@@ -31,7 +31,7 @@ export function drawFormationPoster(canvas: HTMLCanvasElement, data: FormationPo
   ctx.fillStyle = backdrop; ctx.fillRect(20, 20, 1160, 1460);
   rect(32, 28, 568, 4, TEAM_COLOURS.blue.accent); rect(600, 28, 568, 4, TEAM_COLOURS.red.accent);
   text("LOVE FIVE", 42, 70, 23, "#aebfd6");
-  text(competitionLabels[matchCompetition(data.draft)].toUpperCase(), 40, 132, 57, "#fff", 600, 1120);
+  text(getCompetitionLabels(data.cupName)[matchCompetition(data.draft)].toUpperCase(), 40, 132, 57, "#fff", 600, 1120);
   const date = new Date(`${data.draft.date}T12:00:00Z`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).toUpperCase();
   text(date, 42, 176, 29, "#c6d5e8", 500, 1116);
 

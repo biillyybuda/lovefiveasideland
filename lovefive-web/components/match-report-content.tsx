@@ -1,12 +1,13 @@
 import { CompetitionLink as Link } from "@/components/competition-control";
 import type { ReactNode } from "react";
 import type { MatchReport } from "@/lib/match-report";
-import { isLeagueMatch, competitionLabels, matchCompetition, competitionHref } from "@/lib/competition";
+import { isLeagueMatch, getCompetitionLabels, matchCompetition, competitionHref } from "@/lib/competition";
 import { signed } from "@/lib/season-awards";
 
 export function MatchReportContent({ report: r, basePath = "/app", share = false, noteEditor, activitySection, activityEditable = false }: {
   report: MatchReport; basePath?: string; share?: boolean; noteEditor?: ReactNode; activitySection?: ReactNode; activityEditable?: boolean;
 }) {
+  const competitionLabels = getCompetitionLabels(r.cupName);
   const shield = !isLeagueMatch(r.match);
   const reportHref = (href: string) => competitionHref(href, matchCompetition(r.match));
   const [a, b] = r.scoreLabel.split("–");
@@ -28,7 +29,7 @@ export function MatchReportContent({ report: r, basePath = "/app", share = false
         {!share && activitySection && <a className="mini-link" href="#match-activity">{activityEditable ? "Add / edit player activity" : "Player activity"}</a>}
       </nav>
       <div className="review-kicker"><span>{r.season} · Match {r.matchNumber}</span><span>{r.dateLabel}</span><span>Full time</span></div>
-      <p className="competition-note">{competitionLabels[matchCompetition(r.match)]}{shield ? " · MMR protected · Draws award no Shield" : " · Rated league match"}</p>
+      <p className="competition-note">{competitionLabels[matchCompetition(r.match)]}{shield ? " · MMR protected · Draws award no trophy" : " · Rated league match"}</p>
       <h1>{r.headline}</h1>
       <div className="review-scoreboard">
         <div><span>{r.teamALabel}</span><strong>{a}</strong><small>Team A</small></div>
@@ -45,16 +46,16 @@ export function MatchReportContent({ report: r, basePath = "/app", share = false
     {share ? <>
       {r.changes.length > 0 && <section className="panel"><h2>{r.season} · What changed</h2><div className="review-share-changes">{r.changes.slice(0, 2).map(c => <p key={c.name + c.label}><strong>{c.name}</strong> · {c.label}<br/>{c.before} → <b>{c.after}</b></p>)}</div></section>}
       {r.note && <section className="panel review-human-note"><span className="review-eyebrow">From the match · League admin note</span><p>{r.note}</p></section>}
-      <p className="review-footnote">LoveFive · {r.season} season through this match · First appearances and career milestones refer to recorded {shield ? "Shield" : "league"} history.</p>
+      <p className="review-footnote">LoveFive · {r.season} season through this match · First appearances and career milestones refer to recorded {shield ? competitionLabels.immunity_shield : "league"} history.</p>
     </> : <div className="review-layout">
       <div className="review-main">
         <section className="panel"><div className="review-section-heading"><h2>What changed in {r.season}</h2><p>Immediately before → after this result</p></div>
           {r.changes.length ? <div className="review-change-list">{r.changes.slice(0, 5).map(c => <div className="review-change" key={c.name + c.label}>
             <div><span className="review-eyebrow">{c.label}</span><strong>{c.name}</strong></div>
             <div className="review-movement"><span>{c.before}</span><b aria-label="to">→</b><strong>{c.after}</strong></div><p>{c.detail}</p>
-          </div>)}</div> : <p className="muted">{shield ? "Draw — no Shield awarded. League MMR and awards are unchanged." : "No qualifying award movement from this result."}</p>}
+          </div>)}</div> : <p className="muted">{shield ? "Draw — no trophy awarded. League MMR and awards are unchanged." : "No qualifying award movement from this result."}</p>}
           <details className="review-standings"><summary>Season leaders after this match</summary><div>{r.standings.map(s => <p key={`${s.label}-${s.name}`}><span className="review-eyebrow">{s.label}</span><strong>{s.name} · {s.value}</strong><small>{s.detail}</small></p>)}</div>
-            <p className="review-footnote">{shield ? "Shield honours are separate from league season awards." : "Awards use the same rules and eligible roster as Season Review. Matchday estimates do not change award points."}</p>
+            <p className="review-footnote">{shield ? "Cup honours are separate from league season awards." : "Awards use the same rules and eligible roster as Season Review. Matchday estimates do not change award points."}</p>
           </details>
         </section>
 
@@ -84,7 +85,7 @@ export function MatchReportContent({ report: r, basePath = "/app", share = false
       <aside className="review-side">
         <section className="panel"><h2>Lineups</h2>{lineups}{!shield && <p className="review-footnote">Recorded pre-match public MMR: A {r.rating.avgA === null ? "unavailable" : Math.round(r.rating.avgA)} · B {r.rating.avgB === null ? "unavailable" : Math.round(r.rating.avgB)}</p>}</section>
         {activitySection}
-        <section className="panel"><h2>Player details · {r.season}</h2><p className="review-footnote">Season records and last five appearances. {shield ? "Shield results never change league MMR." : "Public-rating changes describe the result, not an individual performance award."}</p>
+        <section className="panel"><h2>Player details · {r.season}</h2><p className="review-footnote">Season records and last five appearances. {shield ? "Cup results never change league MMR." : "Public-rating changes describe the result, not an individual performance award."}</p>
           <div className="review-players">{r.playerNotes.map(p => <details key={p.name}><summary><span><b>{p.name}</b><small>Team {p.side} · {p.appearances} {p.appearances === 1 ? "app" : "apps"} · {p.record}</small></span><strong>{shield ? "MMR protected" : p.delta === null ? "—" : `${signed(p.delta)} MMR`}</strong></summary>
             <p>{p.note || `${p.appearances} appearances in ${r.season}.`}</p><p>Last five: {p.form}</p>{!shield && <p>League MMR: {p.before ?? "unavailable"} → {p.after ?? "unavailable"}</p>}</details>)}</div>
         </section>
@@ -93,7 +94,7 @@ export function MatchReportContent({ report: r, basePath = "/app", share = false
           <p><Link href={reportHref(`${basePath}/matches/${r.previousMeeting.id}`)}>{r.previousMeeting.date}</Link> · {r.previousMeeting.score}</p><p>{r.previousMeeting.shared} shared players; {r.previousMeeting.sameSide} kept together on equivalent sides.</p>
           {r.previousMeeting.sides.map(s => <details key={s.label}><summary>{s.label} · players changed</summary><p>Stayed together: {s.kept.join(", ") || "None"}</p><p>Joined this side: {s.joined.join(", ") || "None"}</p><p>Left this side: {s.left.join(", ") || "None"}</p></details>)}
         </section>}
-        <p className="review-footnote">Season statistics stop at this result, including games on the same date. First appearances and career milestones cover recorded {shield ? "Shield" : "league"} history; they may not be a player’s first game outside these records.</p>
+        <p className="review-footnote">Season statistics stop at this result, including games on the same date. First appearances and career milestones cover recorded {shield ? competitionLabels.immunity_shield : "league"} history; they may not be a player’s first game outside these records.</p>
       </aside>
     </div>}
   </article>;

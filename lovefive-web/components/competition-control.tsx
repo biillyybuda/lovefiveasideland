@@ -1,9 +1,10 @@
 "use client";
 
+import { useCompetitionLabels } from "./cup-name-provider";
 import { Suspense, type ComponentProps } from "react";
 import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
-import { competitionHref, competitionLabels, competitionScope, type CompetitionScope } from "@/lib/competition";
+import { competitionHref, competitionScope, type CompetitionScope } from "@/lib/competition";
 
 export function useCompetition(initial?: string) {
   const params = useSearchParams();
@@ -17,6 +18,7 @@ export function useCompetition(initial?: string) {
 }
 
 export function CompetitionControl({ value, onChange }: { value: CompetitionScope; onChange: (value: CompetitionScope) => void }) {
+  const competitionLabels = useCompetitionLabels();
   return <label className="competition-control"><span>Competition</span>
     <select value={value} onChange={event => onChange(competitionScope(event.target.value))}>
       {Object.entries(competitionLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
